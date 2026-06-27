@@ -1,0 +1,17 @@
+Xorg.tcz
+xf86-video-fbdev.tcz
+# xf86-video-fbturbo.tcz is disabled for now: TC 16 Xorg uses video ABI 25,
+# while the available fbturbo module reports ABI 24.
+flwm.tcz
+jwm.tcz
+aterm.tcz
+xrandr.tcz
+xinput.tcz
+dillo.tcz
+leafpad.tcz
+bc.tcz
+gpicview.tcz
+libffi6.tcz
+geany.tcz
+pcmanfm.tcz
+conky.tcz

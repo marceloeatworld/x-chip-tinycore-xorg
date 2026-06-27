@@ -1,0 +1,9 @@
+# PocketCHIP sun4i touchscreen -> 480x272 landscape Xorg.
+# Captured on the production PocketCHIP with x-chip-touch-calibrate.
+# Format: raw_x raw_y target_x target_y label
+# point top-left raw=58500.44,50004.57 target=40,40
+# point top-right raw=7327.89,49188.58 target=440,40
+# point center raw=32858.17,29716.88 target=240,136
+# point bottom-left raw=58324.44,11391.83 target=40,232
+# point bottom-right raw=7397.22,10805.17 target=440,232
+-1.069801149 0.001502438 1.036070831 0.016517502 -1.201373468 1.045724772 0 0 1

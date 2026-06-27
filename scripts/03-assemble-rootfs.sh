@@ -1,0 +1,4216 @@
+#!/bin/bash -e
+
+# Headless finishing pass + pack the rootfs tar that x-chip-tools flashes:
+#   - compile boot/boot.cmd -> /boot/boot.scr (u-boot loads zImage + dtb)
+#   - point tce at the live CorePure repo + ship the onboot extension list
+#   - start sshd from bootlocal
+#   - pack build/rootfs -> $OUT
+
+HERE=$(cd "$(dirname "$0")/.." && pwd); cd "$HERE"
+source ./config.env
+if [ "${PUBLIC_IMAGE:-0}" != 1 ] && [ -f "$SECRETS_ENV" ]; then
+    # shellcheck disable=SC1090
+    source "$SECRETS_ENV"
+fi
+
+if [ "${PUBLIC_IMAGE:-0}" = 1 ]; then
+    REQUIRE_WIFI_CONFIG=0
+    REQUIRE_AUTHORIZED_KEYS=0
+    SSH_PASSWORD_AUTH=1
+    AUTHORIZED_KEYS_SOURCE=
+    WIFI_SSID=
+    WIFI_PSK=
+fi
+
+if [ -z "${SSH_PASSWORD_AUTH:-}" ]; then
+    if [ "${REQUIRE_AUTHORIZED_KEYS:-1}" = 0 ]; then
+        SSH_PASSWORD_AUTH=1
+    else
+        SSH_PASSWORD_AUTH=0
+    fi
+fi
+case "$SSH_PASSWORD_AUTH" in
+    0|1) ;;
+    *) echo "ERROR: SSH_PASSWORD_AUTH must be 0 or 1" >&2; exit 1 ;;
+esac
+
+if [ -z "${FAKEROOTKEY:-}" ]; then
+    if [ "${ROOTFS_FORCE_FAKEROOT:-0}" = 1 ]; then
+        if command -v fakeroot >/dev/null 2>&1; then
+            exec fakeroot -- env ROOTFS_FORCE_FAKEROOT=0 "$0" "$@"
+        fi
+        echo "ERROR: ROOTFS_FORCE_FAKEROOT=1 but fakeroot is not installed" >&2
+        exit 1
+    fi
+    if [ "$(id -u)" != 0 ]; then
+        if command -v fakeroot >/dev/null 2>&1; then
+            exec fakeroot -- "$0" "$@"
+        fi
+        echo "ERROR: rootfs assembly needs root or fakeroot to preserve ownership and device nodes" >&2
+        echo "Use 'make container-build' or install fakeroot before running this script locally." >&2
+        exit 1
+    fi
+fi
+
+need_root() {
+    if [ "$(id -u)" = 0 ]; then
+        "$@"
+    elif sudo -n true 2>/dev/null; then
+        sudo "$@"
+    elif [ "$1" = chown ]; then
+        "$@" 2>/dev/null || true
+    else
+        "$@"
+    fi
+}
+resolve_path() {
+    case "$1" in
+        /*) printf '%s\n' "$1" ;;
+        *)  printf '%s\n' "$HERE/$1" ;;
+    esac
+}
+
+RFS="$HERE/build/rootfs"
+MKIMAGE=${MKIMAGE:-mkimage}
+if ! command -v "$MKIMAGE" >/dev/null 2>&1; then
+    if [ -x "$HERE/result/bin/mkimage" ]; then
+        MKIMAGE="$HERE/result/bin/mkimage"
+    else
+        echo "need u-boot-tools (mkimage)" >&2
+        exit 1
+    fi
+fi
+
+validate_rootfs_base() {
+    local missing=0 required
+    for required in bin/busybox sbin/init init etc/inittab etc/init.d/tc-config; do
+        if [ ! -e "$RFS/$required" ]; then
+            echo "ERROR: build/rootfs is not a complete CorePure rootfs; missing /$required" >&2
+            missing=1
+        fi
+    done
+    [ "$missing" = 0 ] || {
+        echo "Run 'make base' again before assembling the rootfs." >&2
+        exit 1
+    }
+}
+
+validate_rootfs_base
+[ -f "$RFS/boot/zImage" ] || { echo "run 'make kernel' first (no /boot/zImage)" >&2; exit 1; }
+
+replace_colon_record() {
+    local file=$1 mode=$2 key=$3 line=$4 tmp
+    tmp=$(mktemp)
+    if [ -f "$file" ]; then
+        need_root awk -F: -v key="$key" '$1 != key' "$file" >"$tmp"
+    fi
+    printf '%s\n' "$line" >>"$tmp"
+    need_root install -m "$mode" "$tmp" "$file"
+    rm -f "$tmp"
+}
+
+install_text() {
+    local mode=$1 dest=$2 tmp
+    tmp=$(mktemp)
+    cat >"$tmp"
+    need_root install -m "$mode" "$tmp" "$dest"
+    rm -f "$tmp"
+}
+
+read_touch_calibration_matrix() {
+    local source=$1 matrix fields
+    [ -f "$source" ] || {
+        echo "ERROR: missing touchscreen calibration source: $source" >&2
+        exit 1
+    }
+    matrix=$(sed -n 's/#.*//; /^[[:space:]]*$/d; p; q' "$source")
+    fields=$(printf '%s\n' "$matrix" | awk '{ print NF }')
+    [ "$fields" = 9 ] || {
+        echo "ERROR: touchscreen calibration matrix must contain 9 values: $source" >&2
+        exit 1
+    }
+    printf '%s\n' "$matrix"
+}
+
+ssh_shadow_password() {
+    if [ "$SSH_PASSWORD_AUTH" != 1 ]; then
+        printf ''
+        return 0
+    fi
+    if [ -n "${SSH_PASSWORD_HASH:-}" ]; then
+        case "$SSH_PASSWORD_HASH" in
+            *:*) echo "ERROR: SSH_PASSWORD_HASH must not contain ':'" >&2; exit 1 ;;
+        esac
+        printf '%s' "$SSH_PASSWORD_HASH"
+        return 0
+    fi
+    if [ -z "${SSH_PASSWORD:-}" ]; then
+        echo "ERROR: SSH_PASSWORD must be non-empty when SSH_PASSWORD_AUTH=1" >&2
+        exit 1
+    fi
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "ERROR: openssl is required to hash SSH_PASSWORD" >&2
+        exit 1
+    fi
+    printf '%s\n' "$SSH_PASSWORD" | openssl passwd -6 -salt "${SSH_PASSWORD_SALT:-xchiptinycore}" -stdin
+}
+
+create_static_dev_nodes() {
+    need_root install -d "$RFS/dev" "$RFS/dev/input" "$RFS/dev/net" "$RFS/dev/pts" "$RFS/dev/shm" "$RFS/dev/usb"
+
+    make_node() {
+        local path=$1 mode=$2 type=$3 major=$4 minor=$5
+        if [ ! -c "$path" ]; then
+            need_root rm -f "$path"
+            if ! need_root mknod -m "$mode" "$path" "$type" "$major" "$minor"; then
+                echo "WARN: could not create ${path#$RFS} static device node; relying on devtmpfs" >&2
+            fi
+        fi
+    }
+
+    make_node "$RFS/dev/console" 0600 c 5 1
+    make_node "$RFS/dev/null" 0666 c 1 3
+    make_node "$RFS/dev/zero" 0666 c 1 5
+    make_node "$RFS/dev/full" 0666 c 1 7
+    make_node "$RFS/dev/random" 0666 c 1 8
+    make_node "$RFS/dev/urandom" 0666 c 1 9
+    make_node "$RFS/dev/tty" 0666 c 5 0
+    make_node "$RFS/dev/tty0" 0600 c 4 0
+    make_node "$RFS/dev/tty1" 0600 c 4 1
+    make_node "$RFS/dev/ttyS0" 0600 c 4 64
+    make_node "$RFS/dev/net/tun" 0666 c 10 200
+}
+
+normalize_rootfs_metadata() {
+    create_static_dev_nodes
+
+    need_root chown -R 0:0 "$RFS"
+    if [ -d "$RFS/home/$SSH_USER" ]; then
+        need_root chown -R "$SSH_UID:$SSH_GID" "$RFS/home/$SSH_USER"
+    fi
+
+    [ -e "$RFS/bin/busybox.suid" ] && {
+        need_root chown 0:0 "$RFS/bin/busybox.suid"
+        need_root chmod 4755 "$RFS/bin/busybox.suid"
+    }
+    [ -e "$RFS/usr/bin/sudo" ] && {
+        need_root chown 0:0 "$RFS/usr/bin/sudo"
+        need_root chmod 4755 "$RFS/usr/bin/sudo"
+    }
+    [ -e "$RFS/usr/local/lib/xorg/Xorg" ] && {
+        need_root chown 0:0 "$RFS/usr/local/lib/xorg/Xorg"
+        need_root chmod 4755 "$RFS/usr/local/lib/xorg/Xorg"
+    }
+    [ -e "$RFS/usr/local/lib/xorg/Xorg.wrap" ] && {
+        need_root chown 0:0 "$RFS/usr/local/lib/xorg/Xorg.wrap"
+        need_root chmod 4555 "$RFS/usr/local/lib/xorg/Xorg.wrap"
+    }
+
+    [ -e "$RFS/etc/shadow" ] && {
+        need_root chown 0:0 "$RFS/etc/shadow"
+        need_root chmod 600 "$RFS/etc/shadow"
+    }
+    [ -e "$RFS/etc/sudoers" ] && {
+        need_root chown 0:0 "$RFS/etc/sudoers"
+        need_root chmod 440 "$RFS/etc/sudoers"
+    }
+    [ -e "$RFS/etc/sudoers.d/$SSH_USER" ] && {
+        need_root chown 0:0 "$RFS/etc/sudoers.d/$SSH_USER"
+        need_root chmod 440 "$RFS/etc/sudoers.d/$SSH_USER"
+    }
+
+    if [ -d "$RFS/home/$SSH_USER/.ssh" ]; then
+        need_root chown -R "$SSH_UID:$SSH_GID" "$RFS/home/$SSH_USER/.ssh"
+        need_root chmod 700 "$RFS/home/$SSH_USER/.ssh"
+        [ -e "$RFS/home/$SSH_USER/.ssh/authorized_keys" ] && \
+            need_root chmod 600 "$RFS/home/$SSH_USER/.ssh/authorized_keys"
+    fi
+    if [ -d "$RFS/root/.ssh" ]; then
+        need_root chown -R 0:0 "$RFS/root/.ssh"
+        need_root chmod 700 "$RFS/root/.ssh"
+        [ -e "$RFS/root/.ssh/authorized_keys" ] && \
+            need_root chmod 600 "$RFS/root/.ssh/authorized_keys"
+    fi
+}
+
+install_early_debug() {
+    install_text 0755 "$RFS/opt/x-chip-early-debug.sh" <<'EOF'
+#!/bin/sh
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LOG=/opt/x-chip-early-debug.log
+exec >>"$LOG" 2>&1
+echo "=== x-chip-early-debug $(date 2>/dev/null || true) ==="
+
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sysfs /sys 2>/dev/null || true
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mkdir -p /dev/pts 2>/dev/null || true
+if ! grep -q ' /dev/pts ' /proc/mounts 2>/dev/null; then
+    mount -t devpts devpts /dev/pts -o mode=620,ptmxmode=666 2>/dev/null || \
+        mount -t devpts devpts /dev/pts 2>/dev/null || true
+fi
+
+modprobe libcomposite 2>/dev/null || true
+mkdir -p /sys/kernel/config 2>/dev/null || true
+if ! grep -q ' /sys/kernel/config ' /proc/mounts 2>/dev/null; then
+    mount -t configfs none /sys/kernel/config 2>/dev/null || true
+fi
+
+[ -d /sys/kernel/config/usb_gadget ] || {
+    echo "WARN: usb gadget configfs not available"
+    exit 0
+}
+
+G=/sys/kernel/config/usb_gadget/xchip_early
+if [ -e "$G/UDC" ]; then
+    current="$(cat "$G/UDC" 2>/dev/null || true)"
+    [ -n "$current" ] && exit 0
+fi
+
+mkdir -p "$G" "$G/strings/0x409" "$G/configs/c.1/strings/0x409" 2>/dev/null || exit 0
+echo 0x1d6b > "$G/idVendor" 2>/dev/null || true
+echo 0x0104 > "$G/idProduct" 2>/dev/null || true
+echo 0x0100 > "$G/bcdDevice" 2>/dev/null || true
+echo 0x0200 > "$G/bcdUSB" 2>/dev/null || true
+echo xchip-early > "$G/strings/0x409/serialnumber" 2>/dev/null || true
+echo NTC > "$G/strings/0x409/manufacturer" 2>/dev/null || true
+echo "CHIP TinyCore early debug" > "$G/strings/0x409/product" 2>/dev/null || true
+echo "USB early debug network" > "$G/configs/c.1/strings/0x409/configuration" 2>/dev/null || true
+echo 250 > "$G/configs/c.1/MaxPower" 2>/dev/null || true
+
+FUNC=
+if mkdir -p "$G/functions/rndis.usb0" 2>/dev/null; then
+    FUNC=rndis.usb0
+elif mkdir -p "$G/functions/ecm.usb0" 2>/dev/null; then
+    FUNC=ecm.usb0
+else
+    echo "WARN: no RNDIS/ECM gadget function available"
+    exit 0
+fi
+
+echo de:ad:be:ef:54:01 > "$G/functions/$FUNC/dev_addr" 2>/dev/null || true
+echo de:ad:be:ef:54:02 > "$G/functions/$FUNC/host_addr" 2>/dev/null || true
+[ -e "$G/configs/c.1/$FUNC" ] || ln -s "$G/functions/$FUNC" "$G/configs/c.1/$FUNC" 2>/dev/null || true
+
+UDC="$(ls /sys/class/udc 2>/dev/null | head -n 1)"
+[ -n "$UDC" ] && echo "$UDC" > "$G/UDC" 2>/dev/null || true
+
+i=0
+while [ "$i" -lt 10 ]; do
+    [ -e /sys/class/net/usb0 ] && break
+    i=$((i + 1))
+    sleep 1
+done
+
+if [ -e /sys/class/net/usb0 ]; then
+    ifconfig usb0 192.168.82.1 netmask 255.255.255.0 up 2>/dev/null || true
+    echo "USB early debug network ready on 192.168.82.1"
+else
+    echo "WARN: usb0 did not appear"
+fi
+EOF
+
+    if [ -f "$RFS/etc/init.d/rcS" ] && ! grep -q 'x-chip early debug' "$RFS/etc/init.d/rcS"; then
+        local tmp
+        tmp=$(mktemp)
+        awk '
+            { print }
+            $0 == "/bin/mount -a" {
+                print ""
+                print "# --- x-chip early debug ---"
+                print "/opt/x-chip-early-debug.sh &"
+            }
+        ' "$RFS/etc/init.d/rcS" >"$tmp"
+        need_root install -m755 "$tmp" "$RFS/etc/init.d/rcS"
+        rm -f "$tmp"
+    fi
+}
+
+install_runtime_identity() {
+    local shadow_password
+    need_root install -d "$RFS/etc" "$RFS/etc/sysconfig" "$RFS/home" "$RFS/opt"
+    [ -f "$RFS/etc/passwd" ] || echo 'root:x:0:0:root:/root:/bin/sh' | need_root tee "$RFS/etc/passwd" >/dev/null
+    [ -f "$RFS/etc/group" ] || echo 'root:x:0:' | need_root tee "$RFS/etc/group" >/dev/null
+    [ -f "$RFS/etc/shadow" ] || echo 'root:*:19000:0:99999:7:::' | need_root tee "$RFS/etc/shadow" >/dev/null
+
+    replace_colon_record "$RFS/etc/group" 0644 "$SSH_USER" \
+        "$SSH_USER:x:$SSH_GID:"
+    for group in \
+        staff:50 \
+        adm:4 \
+        dialout:20 \
+        audio:29 \
+        video:44 \
+        plugdev:46 \
+        users:100 \
+        netdev:101 \
+        input:102 \
+        render:103 \
+        bluetooth:104 \
+        gpio:105 \
+        i2c:106 \
+        spi:107; do
+        replace_colon_record "$RFS/etc/group" 0644 "${group%%:*}" \
+            "${group%%:*}:x:${group##*:}:$SSH_USER"
+    done
+    replace_colon_record "$RFS/etc/passwd" 0644 "$SSH_USER" \
+        "$SSH_USER:x:$SSH_UID:$SSH_GID:CHIP User:/home/$SSH_USER:/bin/sh"
+    shadow_password=$(ssh_shadow_password)
+    replace_colon_record "$RFS/etc/shadow" 0600 "$SSH_USER" \
+        "$SSH_USER:$shadow_password:19000:0:99999:7:::"
+
+    echo "$CHIP_HOSTNAME" | need_root tee "$RFS/etc/hostname" >/dev/null
+    echo "$SSH_USER" | need_root tee "$RFS/etc/sysconfig/tcuser" >/dev/null
+    install_text 0644 "$RFS/etc/hosts" <<EOF
+127.0.0.1	localhost
+127.0.1.1	$CHIP_HOSTNAME
+
+::1		localhost ip6-localhost ip6-loopback
+ff02::1		ip6-allnodes
+ff02::2		ip6-allrouters
+EOF
+
+    need_root install -d -m700 "$RFS/home/$SSH_USER/.ssh" "$RFS/root/.ssh"
+    local keys_src=
+    if [ "${REQUIRE_AUTHORIZED_KEYS:-1}" = 1 ]; then
+        if [ -f "$AUTHORIZED_KEYS_SOURCE" ]; then
+            keys_src=$AUTHORIZED_KEYS_SOURCE
+        elif [ -f "$HOME/.ssh/pocket.pub" ]; then
+            keys_src=$HOME/.ssh/pocket.pub
+        elif [ -f "$HOME/.ssh/id_ed25519.pub" ]; then
+            keys_src=$HOME/.ssh/id_ed25519.pub
+        fi
+    fi
+
+    if [ -n "$keys_src" ]; then
+        need_root install -m600 "$keys_src" "$RFS/home/$SSH_USER/.ssh/authorized_keys"
+        need_root install -m600 "$keys_src" "$RFS/root/.ssh/authorized_keys"
+    else
+        if [ "${REQUIRE_AUTHORIZED_KEYS:-1}" = 1 ]; then
+            echo "ERROR: no authorized_keys source found" >&2
+            echo "Set AUTHORIZED_KEYS_SOURCE or create ~/.ssh/pocket.pub before building." >&2
+            exit 1
+        fi
+        echo "WARN: no authorized_keys source found; SSH login will need manual setup" >&2
+        need_root install -m600 /dev/null "$RFS/home/$SSH_USER/.ssh/authorized_keys"
+        need_root install -m600 /dev/null "$RFS/root/.ssh/authorized_keys"
+    fi
+    need_root chown -R "$SSH_UID:$SSH_GID" "$RFS/home/$SSH_USER"
+    need_root chmod 700 "$RFS/root/.ssh"
+
+    need_root install -d "$RFS/etc/sudoers.d"
+    install_text 0440 "$RFS/etc/sudoers.d/$SSH_USER" <<EOF
+$SSH_USER ALL=(ALL) NOPASSWD: ALL
+EOF
+    need_root touch "$RFS/etc/sudoers"
+    need_root grep -Eq "^$SSH_USER[[:space:]]+ALL=\\(ALL\\)[[:space:]]+NOPASSWD:[[:space:]]*ALL" "$RFS/etc/sudoers" 2>/dev/null || \
+        echo "$SSH_USER ALL=(ALL) NOPASSWD: ALL" | need_root tee -a "$RFS/etc/sudoers" >/dev/null
+}
+
+install_os_branding() {
+    local version_id
+    version_id=${TINYCORE_VERSION%%.*}
+    install_text 0644 "$RFS/etc/os-release" <<EOF
+NAME="PocketCHIP TinyCore"
+VERSION="$TINYCORE_VERSION"
+ID=pocketchip-tinycore
+ID_LIKE=tinycore
+VERSION_ID=$version_id
+PRETTY_NAME="PocketCHIP TinyCore $TINYCORE_VERSION"
+ANSI_COLOR="0;34"
+HOME_URL="$PROJECT_REPO_URL"
+BUG_REPORT_URL="$PROJECT_REPO_URL/issues"
+EOF
+
+    install_text 0644 "$RFS/etc/issue" <<EOF
+PocketCHIP TinyCore $TINYCORE_VERSION \n \l
+
+EOF
+
+    install_text 0644 "$RFS/etc/motd" <<EOF
+PocketCHIP TinyCore $TINYCORE_VERSION
+EOF
+}
+
+install_console_config() {
+    install_text 0755 "$RFS/opt/x-chip-autologin.sh" <<'EOF'
+#!/bin/sh
+exec /bin/login -f @SSH_USER@
+EOF
+    need_root sed -i "s/@SSH_USER@/$SSH_USER/g" "$RFS/opt/x-chip-autologin.sh"
+
+    install_text 0755 "$RFS/opt/x-chip-tty1-getty.sh" <<'EOF'
+#!/bin/sh
+READY=/tmp/x-chip-console-ready
+WAITED=0
+while [ ! -e "$READY" ] && [ "$WAITED" -lt 30 ]; do
+	sleep 1
+	WAITED=$((WAITED + 1))
+done
+
+exec </dev/tty1 >/dev/tty1 2>&1
+stty sane echo icanon isig icrnl opost onlcr 2>/dev/null || true
+
+if [ -w /dev/tty1 ]; then
+	printf '\033c\033[2J\033[H' 2>/dev/null || true
+	printf 'PocketCHIP TinyCore ready - kernel %s\n\n' "$(uname -r)" 2>/dev/null || true
+	if [ ! -e "$READY" ]; then
+		printf 'Firstboot is still running; see /opt/x-chip-firstboot.log\n\n' 2>/dev/null || true
+	fi
+fi
+
+exec /sbin/getty -n -l /opt/x-chip-autologin.sh 38400 tty1
+EOF
+    replace_colon_record "$RFS/etc/inittab" 0644 tty1 \
+        'tty1::respawn:/opt/x-chip-tty1-getty.sh'
+    replace_colon_record "$RFS/etc/inittab" 0644 ttyS0 \
+        'ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100'
+}
+
+patch_tinycore_tce_setup() {
+    local file="$RFS/usr/bin/tce-setup" tmp
+    [ -f "$file" ] || return 0
+    if grep -q 'MOUNTPOINT="/tmp"; TCE_DIR="tce"' "$file"; then
+        tmp=$(mktemp)
+        sed 's/MOUNTPOINT="\/tmp"; TCE_DIR="tce"/MOUNTPOINT=""; TCE_DIR="tce"/' "$file" >"$tmp"
+        need_root install -m755 "$tmp" "$file"
+        rm -f "$tmp"
+    fi
+}
+
+patch_tinycore_tc_config() {
+    local file="$RFS/etc/init.d/tc-config" tmp
+    [ -f "$file" ] || return 0
+
+    tmp=$(mktemp)
+    awk '{
+        if ($0 == "/sbin/udevadm settle") {
+            print "/sbin/udevadm settle --timeout=5 >/dev/null 2>&1 || true"
+        } else if ($0 ~ /^[[:space:]]*wait \$fstab_pid[[:space:]]*$/) {
+            print "[ -n \"${fstab_pid:-}\" ] && wait \"$fstab_pid\" || true"
+        } else {
+            print
+        }
+    }' "$file" >"$tmp"
+    need_root install -m755 "$tmp" "$file"
+    rm -f "$tmp"
+}
+
+write_wifi_config() {
+    if [ "${PUBLIC_IMAGE:-0}" = 1 ]; then
+        need_root rm -f "$RFS/etc/wpa_supplicant.conf"
+        return 0
+    fi
+    if [ -z "${WIFI_SSID:-}" ]; then
+        if [ "${REQUIRE_WIFI_CONFIG:-1}" = 1 ]; then
+            echo "ERROR: WIFI_SSID is not set" >&2
+            echo "Copy secrets.env.example to secrets.env and set WIFI_SSID/WIFI_PSK, or build with REQUIRE_WIFI_CONFIG=0." >&2
+            exit 1
+        fi
+        return 0
+    fi
+    if [ -z "${WIFI_PSK:-}" ]; then
+        if [ "${REQUIRE_WIFI_CONFIG:-1}" = 1 ]; then
+            echo "ERROR: WIFI_SSID is set but WIFI_PSK is missing" >&2
+            echo "Set WIFI_PSK in secrets.env, or build with REQUIRE_WIFI_CONFIG=0." >&2
+            exit 1
+        fi
+        echo "WARN: WIFI_SSID set but WIFI_PSK missing; WiFi config not written" >&2
+        return 0
+    fi
+
+    local ssid_quoted psk_quoted
+    ssid_quoted=$(printf '%s' "$WIFI_SSID" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    psk_quoted=$(printf '%s' "$WIFI_PSK" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    need_root install -d "$RFS/etc"
+    install_text 0600 "$RFS/etc/wpa_supplicant.conf" <<EOF
+ctrl_interface=/var/run/wpa_supplicant
+update_config=0
+country=$WIFI_COUNTRY
+
+network={
+	ssid="$ssid_quoted"
+	psk="$psk_quoted"
+	key_mgmt=WPA-PSK
+}
+EOF
+}
+
+install_board_runtime_config() {
+    need_root install -d "$RFS/etc/modprobe.d"
+    install_text 0644 "$RFS/etc/modprobe.d/r8723bs.conf" <<'EOF'
+options r8723bs rtw_power_mgnt=0 rtw_ips_mode=0
+EOF
+    need_root touch "$RFS/etc/modprobe.conf"
+    need_root grep -qxF 'options r8723bs rtw_power_mgnt=0 rtw_ips_mode=0' "$RFS/etc/modprobe.conf" 2>/dev/null || \
+        echo 'options r8723bs rtw_power_mgnt=0 rtw_ips_mode=0' | need_root tee -a "$RFS/etc/modprobe.conf" >/dev/null
+}
+
+validate_pocketchip_bkeymap() {
+    local map=$1 normal_prefix special_prefix
+    normal_prefix=$(od -An -tx1 -j264 -N16 "$map" | tr -d ' \n')
+    [ "$normal_prefix" = "021b0031003200330034003500360037" ] || {
+        echo "ERROR: generated PocketCHIP keymap is missing the normal US key entries" >&2
+        return 1
+    }
+    special_prefix=$(od -An -tx1 -j816 -N10 "$map" | tr -d ' \n')
+    [ "$special_prefix" = "0b7b007d005b005d007c" ] || {
+        echo "ERROR: generated PocketCHIP keymap is missing Fn/AltGr special entries" >&2
+        return 1
+    }
+}
+
+install_keymap() {
+    local keymap_src keymap_base keymap_bin keymap_err
+    keymap_src=$(resolve_path "$KEYMAP_SOURCE")
+    [ -f "$keymap_src" ] || {
+        echo "ERROR: keymap source not found: $keymap_src" >&2
+        return 1
+    }
+    keymap_base="$HERE/build/linux-$KERNEL_VERSION/drivers/tty/vt/defkeymap.map"
+    [ -f "$keymap_base" ] || {
+        echo "ERROR: base console keymap not found: $keymap_base" >&2
+        return 1
+    }
+    command -v loadkeys >/dev/null || {
+        echo "ERROR: loadkeys missing on build host; cannot build complete PocketCHIP keymap" >&2
+        return 1
+    }
+
+    keymap_bin=$(mktemp)
+    keymap_err=$(mktemp)
+    # pocketchip.kmap is a loadkeys overlay, not a complete map. Always merge it
+    # with the kernel's default Linux console map before converting to BusyBox
+    # loadkmap format; compiling the overlay alone breaks normal keys.
+    if ! loadkeys -q -b "$keymap_base" "$keymap_src" >"$keymap_bin" 2>"$keymap_err"; then
+        echo "ERROR: PocketCHIP keymap conversion failed" >&2
+        sed 's/^/ERROR: loadkeys: /' "$keymap_err" >&2 || true
+        rm -f "$keymap_bin" "$keymap_err"
+        return 1
+    fi
+    validate_pocketchip_bkeymap "$keymap_bin" || {
+        rm -f "$keymap_bin" "$keymap_err"
+        return 1
+    }
+    need_root install -d "$RFS/usr/share/kmap"
+    need_root install -m644 "$keymap_src" "$RFS/usr/share/kmap/pocketchip.loadkeys"
+    need_root install -m644 "$keymap_bin" "$RFS/usr/share/kmap/pocketchip.kmap"
+    rm -f "$keymap_bin" "$keymap_err"
+}
+
+install_keyboard_debug_tools() {
+    need_root install -d "$RFS/usr/local/bin"
+    install_text 0755 "$RFS/usr/local/bin/x-chip-keyboard-status" <<'EOF'
+#!/bin/sh
+echo "== modules =="
+lsmod | grep -E '(^tca8418_keypad|^matrix_keymap|^sun4i_ts)' || true
+
+echo
+echo "== input devices =="
+cat /proc/bus/input/devices 2>/dev/null | awk '
+	/^I: / { block=$0 "\n"; keep=0; next }
+	/^$/ {
+		if (keep) print block
+		block=""
+		keep=0
+		next
+	}
+	{
+		block=block $0 "\n"
+		if ($0 ~ /Name=.*tca8418/ || $0 ~ /Name=.*1c25000.rtp/) keep=1
+	}
+	END { if (keep) print block }
+'
+
+echo
+echo "== keymap =="
+ls -l /usr/share/kmap/pocketchip.* 2>/dev/null || true
+if [ -r /var/log/loadkmap.log ]; then
+	echo
+	echo "== loadkmap log =="
+	cat /var/log/loadkmap.log
+fi
+
+echo
+echo "== tty console =="
+cat /proc/consoles 2>/dev/null || true
+cat /proc/sys/kernel/printk 2>/dev/null || true
+EOF
+}
+
+install_hardware_debug_tools() {
+    need_root install -d "$RFS/usr/local/bin"
+    need_root install -d "$RFS/usr/local/etc/x-chip"
+    install_text 0644 "$RFS/usr/local/etc/x-chip/display.conf" <<EOF
+LCD_BRIGHTNESS=${LCD_BRIGHTNESS:-6}
+EOF
+    install_text 0644 "$RFS/usr/local/etc/x-chip/desktop.conf" <<EOF
+X_CHIP_DESKTOP_AUTOSTART=${X_CHIP_DESKTOP_AUTOSTART:-1}
+X_CHIP_DESKTOP_WM=${X_CHIP_DESKTOP_WM:-jwm}
+X_CHIP_DESKTOP_VT=${X_CHIP_DESKTOP_VT:-2}
+EOF
+    install_text 0644 "$RFS/usr/local/etc/x-chip/wifi.conf" <<'EOF'
+X_CHIP_WIFI_CLIENT_DRIVER=rtl8723bs
+X_CHIP_WIFI_SCAN_DRIVER=rtl8812au
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-audio-status" <<'EOF'
+#!/bin/sh
+echo "== ALSA cards =="
+cat /proc/asound/cards 2>/dev/null || true
+
+echo
+echo "== ALSA devices =="
+cat /proc/asound/devices 2>/dev/null || true
+
+echo
+echo "== modules =="
+lsmod | grep -E '(^snd|sun4i|simple_card)' || true
+
+echo
+echo "== aplay =="
+command -v aplay >/dev/null 2>&1 && aplay -l 2>/dev/null || true
+
+echo
+echo "== mixer =="
+command -v amixer >/dev/null 2>&1 && amixer scontrols 2>/dev/null || true
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-power-status" <<'EOF'
+#!/bin/sh
+
+read_one() {
+	[ -r "$1" ] && sed -n '1p' "$1" 2>/dev/null
+}
+
+fmt_uv() {
+	v=$1
+	case "$v" in ''|*[!0-9]*) return 1 ;; esac
+	printf '%s.%03d V' "$((v / 1000000))" "$(((v % 1000000) / 1000))"
+}
+
+fmt_ua() {
+	v=$1
+	case "$v" in ''|*[!0-9]*) return 1 ;; esac
+	printf '%s mA' "$((v / 1000))"
+}
+
+echo "Power"
+echo "====="
+
+bat=
+for p in /sys/class/power_supply/*; do
+	[ -e "$p" ] || continue
+	[ "$(read_one "$p/type")" = Battery ] && { bat=$p; break; }
+done
+if [ -n "$bat" ]; then
+	cap=$(read_one "$bat/capacity")
+	status=$(read_one "$bat/status")
+	voltage=$(read_one "$bat/voltage_now")
+	current=$(read_one "$bat/current_now")
+	printf 'Battery: %s%% %s\n' "${cap:-?}" "${status:-unknown}"
+	[ -n "$voltage" ] && printf 'Voltage: ' && fmt_uv "$voltage" && printf '\n'
+	[ -n "$current" ] && printf 'Current: ' && fmt_ua "$current" && printf '\n'
+else
+	echo "Battery: not found"
+fi
+
+for name in axp20x-usb axp20x-ac; do
+	p=/sys/class/power_supply/$name
+	[ -d "$p" ] || continue
+	online=$(read_one "$p/online")
+	voltage=$(read_one "$p/voltage_now")
+	current=$(read_one "$p/current_now")
+	label=$name
+	[ "$name" = axp20x-usb ] && label=USB
+	[ "$name" = axp20x-ac ] && label=AC
+	printf '%s: online=%s' "$label" "${online:-?}"
+	[ -n "$voltage" ] && printf ' ' && fmt_uv "$voltage"
+	[ -n "$current" ] && printf ' ' && fmt_ua "$current"
+	printf '\n'
+done
+
+for c in /sys/devices/system/cpu/cpu*/cpufreq; do
+	[ -d "$c" ] || continue
+	gov=$(read_one "$c/scaling_governor")
+	freq=$(read_one "$c/scaling_cur_freq")
+	[ -n "$freq" ] && printf 'CPU: %s MHz %s\n' "$((freq / 1000))" "${gov:-}"
+	break
+done
+
+for z in /sys/class/thermal/thermal_zone*; do
+	[ -r "$z/temp" ] || continue
+	temp=$(read_one "$z/temp")
+	printf 'Temp: %s.%s C\n' "$((temp / 1000))" "$(((temp % 1000) / 100))"
+	break
+done
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-term-hold" <<'EOF'
+#!/bin/sh
+
+if [ "$#" -eq 0 ]; then
+	echo "Usage: x-chip-term-hold COMMAND [ARG...]"
+	echo
+	echo "Press enter to close."
+	read _ || true
+	exit 2
+fi
+
+"$@"
+status=$?
+
+echo
+if [ "$status" -ne 0 ]; then
+	echo "Command exited with status $status"
+fi
+echo "Press enter to close."
+read _ || true
+exit 0
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-status" <<'EOF'
+#!/bin/sh
+
+first_wifi_iface() {
+	for iface_path in /sys/class/net/wlan* /sys/class/net/wlp*; do
+		[ -e "$iface_path" ] || continue
+		printf '%s\n' "${iface_path##*/}"
+		return 0
+	done
+	return 1
+}
+
+read_one() {
+	[ -r "$1" ] && sed -n '1p' "$1" 2>/dev/null
+}
+
+show_power() {
+	bat=
+	for p in /sys/class/power_supply/*; do
+		[ -e "$p" ] || continue
+		type=$(read_one "$p/type")
+		[ "$type" = Battery ] && { bat=$p; break; }
+	done
+	if [ -n "$bat" ]; then
+		cap=$(read_one "$bat/capacity")
+		status=$(read_one "$bat/status")
+		printf 'Battery: %s%% %s\n' "${cap:-?}" "${status:-unknown}"
+	else
+		echo "Battery: not found"
+	fi
+	usb=?
+	ac=?
+	[ -r /sys/class/power_supply/axp20x-usb/online ] && usb=$(read_one /sys/class/power_supply/axp20x-usb/online)
+	[ -r /sys/class/power_supply/axp20x-ac/online ] && ac=$(read_one /sys/class/power_supply/axp20x-ac/online)
+	printf 'Power: USB=%s AC=%s\n' "$usb" "$ac"
+}
+
+show_wifi() {
+	iface=$(first_wifi_iface 2>/dev/null || true)
+	if [ -z "$iface" ]; then
+		echo "WiFi: no interface"
+		return
+	fi
+	ip4=
+	if command -v ip >/dev/null 2>&1; then
+		ip4=$(ip addr show "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet \([^ ]*\).*/\1/p' | head -n 1)
+	elif command -v ifconfig >/dev/null 2>&1; then
+		ip4=$(ifconfig "$iface" 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p; s/.*inet \([0-9.][0-9.]*\).*/\1/p' | head -n 1)
+	fi
+	link=$(iw dev "$iface" link 2>/dev/null)
+	ssid=$(printf '%s\n' "$link" | sed -n 's/^[[:space:]]*SSID: //p' | head -n 1)
+	signal=$(printf '%s\n' "$link" | sed -n 's/^[[:space:]]*signal: //p' | head -n 1)
+	[ -n "$ssid" ] || ssid=disconnected
+	printf 'WiFi: %s %s\n' "$iface" "$ssid"
+	[ -n "$ip4" ] && printf 'IP: %s\n' "$ip4"
+	[ -n "$signal" ] && printf 'Signal: %s\n' "$signal"
+}
+
+show_display() {
+	bl=
+	for p in /sys/class/backlight/*; do
+		[ -d "$p" ] || continue
+		bl=$p
+		break
+	done
+	if [ -n "$bl" ]; then
+		cur=$(read_one "$bl/brightness")
+		max=$(read_one "$bl/max_brightness")
+		printf 'Brightness: %s/%s\n' "${cur:-?}" "${max:-?}"
+	fi
+}
+
+show_cpu() {
+	temp=
+	for z in /sys/class/thermal/thermal_zone*; do
+		[ -r "$z/temp" ] || continue
+		temp=$(read_one "$z/temp")
+		break
+	done
+	freq=
+	for c in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do
+		[ -r "$c" ] || continue
+		freq=$(read_one "$c")
+		break
+	done
+	[ -n "$temp" ] && printf 'Temp: %s.%s C\n' "$((temp / 1000))" "$(((temp % 1000) / 100))"
+	[ -n "$freq" ] && printf 'CPU: %s MHz\n' "$((freq / 1000))"
+	[ -r /proc/loadavg ] && printf 'Load: %s\n' "$(cut -d' ' -f1-3 /proc/loadavg)"
+}
+
+show_memory_disk() {
+	awk '
+		$1 == "MemTotal:" { total = int($2 / 1024) }
+		$1 == "MemAvailable:" { avail = int($2 / 1024) }
+		END {
+			if (total > 0) printf "RAM: %d/%d MB free\n", avail, total
+		}
+	' /proc/meminfo 2>/dev/null
+	df -h / 2>/dev/null | awk 'NR == 2 { printf "Disk /: %s/%s used %s\n", $3, $2, $5 }'
+}
+
+draw() {
+	clear 2>/dev/null || true
+	echo "Pocket Status"
+	echo "============="
+	show_power
+	show_wifi
+	show_display
+	show_cpu
+	show_memory_disk
+}
+
+if [ "${1:-}" = once ]; then
+	draw
+	exit 0
+fi
+
+while :; do
+	draw
+	echo
+	printf '[r] refresh  [q] close > '
+	read choice || exit 0
+	case "$choice" in
+		q|Q) exit 0 ;;
+	esac
+done
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-calc" <<'EOF'
+#!/bin/sh
+
+need_bc() {
+	command -v bc >/dev/null 2>&1 || {
+		echo "Calculator unavailable: bc is not installed." >&2
+		exit 1
+	}
+}
+
+need_bc
+
+if [ "$#" -gt 0 ]; then
+	printf '%s\n' "$*" | bc -l
+	exit $?
+fi
+
+clear 2>/dev/null || true
+echo "Calculator"
+echo "=========="
+echo "Type an expression, or q to close."
+echo
+
+while :; do
+	printf 'calc> '
+	read expr || exit 0
+	case "$expr" in
+		q|Q|quit|exit) exit 0 ;;
+		'') continue ;;
+	esac
+	printf '%s\n' "$expr" | bc -l
+done
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-time" <<'EOF'
+#!/bin/sh
+
+set -u
+
+SERVERS=${X_CHIP_NTP_SERVERS:-"0.pool.ntp.org 1.pool.ntp.org time.cloudflare.com"}
+LOG=${X_CHIP_TIME_LOG:-/var/log/x-chip-time-sync.log}
+
+show_ip() {
+	if command -v ip >/dev/null 2>&1; then
+		ip route 2>/dev/null | sed -n 's/^default /Default route: /p' | head -n 1
+		ip addr show 2>/dev/null | sed -n 's/^[[:space:]]*inet \([^ ]*\).* scope global.*/IPv4: \1/p' | head -n 3
+	elif command -v route >/dev/null 2>&1; then
+		route -n 2>/dev/null | awk '$1 == "0.0.0.0" { print "Default route: " $2; exit }'
+		ifconfig 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/IPv4: \1/p; s/.*inet \([0-9.][0-9.]*\).*/IPv4: \1/p' | head -n 3
+	fi
+}
+
+network_ready() {
+	if command -v ip >/dev/null 2>&1; then
+		ip route 2>/dev/null | grep -q '^default '
+	elif command -v route >/dev/null 2>&1; then
+		route -n 2>/dev/null | awk '$1 == "0.0.0.0" { found = 1 } END { exit found ? 0 : 1 }'
+	else
+		return 0
+	fi
+}
+
+run_as_root() {
+	if [ "$(id -u)" = 0 ]; then
+		"$@"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo "$@"
+	else
+		echo "Need root privileges." >&2
+		return 1
+	fi
+}
+
+status() {
+	echo "Time"
+	echo "===="
+	date
+	echo "UTC: $(TZ=UTC date)"
+	echo "TZ: ${TZ:-system default}"
+	if pgrep -x ntpd >/dev/null 2>&1; then
+		echo "NTP: running"
+	else
+		echo "NTP: stopped"
+	fi
+	if [ -e /dev/misc/rtc ] || [ -e /dev/rtc0 ]; then
+		echo "RTC: present"
+	else
+		echo "RTC: not present"
+	fi
+	show_ip || true
+	[ -r "$LOG" ] && {
+		echo
+		echo "Last sync log:"
+		tail -n 8 "$LOG"
+	}
+}
+
+sync_now() {
+	command -v ntpd >/dev/null 2>&1 || {
+		echo "NTP unavailable: ntpd is missing." >&2
+		return 1
+	}
+	args=
+	for server in $SERVERS; do
+		args="$args -p $server"
+	done
+	echo "Syncing time..."
+	echo "Servers:$SERVERS"
+	if command -v timeout >/dev/null 2>&1; then
+		# shellcheck disable=SC2086
+		run_as_root timeout 60 ntpd -nq $args
+	else
+		# shellcheck disable=SC2086
+		run_as_root ntpd -nq $args
+	fi
+	rc=$?
+	echo
+	date
+	return "$rc"
+}
+
+sync_background() {
+	(
+		i=0
+		while [ "$i" -lt 6 ]; do
+			if network_ready; then
+				sync_now && exit 0
+			else
+				echo "Waiting for network..."
+			fi
+			i=$((i + 1))
+			sleep 20
+		done
+		exit 1
+	) >"$LOG" 2>&1 &
+}
+
+set_manual() {
+	value=${*:-}
+	if [ -z "$value" ]; then
+		echo "Enter date/time."
+		echo "Examples:"
+		echo "  2026-06-27 14:30:00"
+		echo "  062714302026.00"
+		printf '> '
+		read value || return 1
+	fi
+	[ -n "$value" ] || return 1
+	run_as_root date -s "$value"
+	date
+}
+
+pause() {
+	echo
+	echo "Press enter to continue."
+	read _ || true
+}
+
+menu() {
+	while :; do
+		clear 2>/dev/null || true
+		status
+		echo
+		echo "1) Sync Internet Time"
+		echo "2) Set Date/Time"
+		echo "3) Refresh"
+		echo "q) Quit"
+		printf '> '
+		read choice || exit 0
+		case "$choice" in
+			1) sync_now; pause ;;
+			2) set_manual; pause ;;
+			3) ;;
+			q|Q) exit 0 ;;
+		esac
+	done
+}
+
+case "${1:-menu}" in
+	status) status ;;
+	sync) sync_now ;;
+	sync-background) sync_background ;;
+	set) shift; set_manual "$@" ;;
+	menu) menu ;;
+	*) echo "Usage: x-chip-time [menu|status|sync|sync-background|set VALUE]" >&2; exit 2 ;;
+esac
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-open-image" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+HOME_DIR=${HOME:-/home/chip}
+
+need_viewer() {
+	command -v gpicview >/dev/null 2>&1 || {
+		echo "Image viewer unavailable: gpicview is not installed." >&2
+		exit 1
+	}
+}
+
+list_images() {
+	for dir in "$HOME_DIR/Pictures" "$HOME_DIR/Downloads" "$HOME_DIR"; do
+		[ -d "$dir" ] || continue
+		find "$dir" -maxdepth 2 -type f \( \
+			-name '*.png' -o -name '*.PNG' -o \
+			-name '*.jpg' -o -name '*.JPG' -o \
+			-name '*.jpeg' -o -name '*.JPEG' -o \
+			-name '*.gif' -o -name '*.GIF' -o \
+			-name '*.webp' -o -name '*.WEBP' -o \
+			-name '*.xpm' -o -name '*.XPM' \) 2>/dev/null
+	done | awk '!seen[$0]++'
+}
+
+open_file() {
+	file=$1
+	[ -f "$file" ] || {
+		echo "Not a file: $file" >&2
+		return 1
+	}
+	DISPLAY="$DISPLAY" gpicview "$file"
+}
+
+status() {
+	echo "Image Viewer"
+	echo "============"
+	command -v gpicview >/dev/null 2>&1 && echo "gpicview: installed" || echo "gpicview: missing"
+	count=$(list_images | wc -l | awk '{print $1}')
+	echo "Images found: $count"
+}
+
+if [ "${1:-}" = status ]; then
+	status
+	exit 0
+fi
+
+need_viewer
+
+if [ "$#" -gt 0 ]; then
+	for file in "$@"; do
+		open_file "$file"
+	done
+	exit 0
+fi
+
+tmp=/tmp/x-chip-images.$$
+trap 'rm -f "$tmp"' EXIT
+list_images >"$tmp"
+if [ ! -s "$tmp" ]; then
+	echo "No image found in Pictures, Downloads, or home."
+	printf 'Image path: '
+	read file || exit 0
+	[ -n "$file" ] && open_file "$file"
+	exit 0
+fi
+
+echo "Images:"
+awk '{ printf "%2d) %s\n", NR, $0 }' "$tmp"
+echo
+printf 'Open number, or q: '
+read choice || exit 0
+case "$choice" in
+	q|Q|'') exit 0 ;;
+	*[!0-9]*) echo "Invalid selection" >&2; exit 2 ;;
+esac
+file=$(sed -n "${choice}p" "$tmp")
+[ -n "$file" ] || {
+	echo "Invalid selection" >&2
+	exit 2
+}
+open_file "$file"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-music" <<'EOF'
+#!/bin/sh
+set -eu
+
+HOME_DIR=${HOME:-/home/chip}
+
+load_media() {
+	x-chip-media-on >/tmp/x-chip-media-on.log 2>&1 || {
+		cat /tmp/x-chip-media-on.log >&2 2>/dev/null || true
+		return 1
+	}
+	command -v mpg123 >/dev/null 2>&1 || {
+		echo "Music player unavailable: mpg123 is not installed." >&2
+		return 1
+	}
+}
+
+list_music() {
+	for dir in "$HOME_DIR/Music" "$HOME_DIR/Downloads" "$HOME_DIR"; do
+		[ -d "$dir" ] || continue
+		find "$dir" -maxdepth 2 -type f \( -name '*.mp3' -o -name '*.MP3' \) 2>/dev/null
+	done | awk '!seen[$0]++'
+}
+
+status() {
+	echo "Music"
+	echo "====="
+	command -v mpg123 >/dev/null 2>&1 && echo "mpg123: installed" || echo "mpg123: not loaded"
+	count=$(list_music | wc -l | awk '{print $1}')
+	echo "MP3 files found: $count"
+	echo "Controls in player: s stop, p pause, q quit"
+}
+
+play_file() {
+	file=$1
+	[ -f "$file" ] || {
+		echo "Not a file: $file" >&2
+		return 1
+	}
+	load_media
+	mpg123 -C "$file"
+}
+
+case "${1:-menu}" in
+	status) status; exit 0 ;;
+	stop) pkill -x mpg123 2>/dev/null || killall mpg123 2>/dev/null || true; exit 0 ;;
+	play) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-music play FILE" >&2; exit 2; }; play_file "$1"; exit $? ;;
+esac
+
+if [ "$#" -gt 0 ] && [ "$1" != menu ]; then
+	play_file "$1"
+	exit $?
+fi
+
+tmp=/tmp/x-chip-music.$$
+trap 'rm -f "$tmp"' EXIT
+list_music >"$tmp"
+if [ ! -s "$tmp" ]; then
+	echo "No MP3 found in Music, Downloads, or home."
+	printf 'MP3 path: '
+	read file || exit 0
+	[ -n "$file" ] && play_file "$file"
+	exit 0
+fi
+
+echo "Music:"
+awk '{ printf "%2d) %s\n", NR, $0 }' "$tmp"
+echo
+printf 'Play number, or q: '
+read choice || exit 0
+case "$choice" in
+	q|Q|'') exit 0 ;;
+	*[!0-9]*) echo "Invalid selection" >&2; exit 2 ;;
+esac
+file=$(sed -n "${choice}p" "$tmp")
+[ -n "$file" ] || {
+	echo "Invalid selection" >&2
+	exit 2
+}
+play_file "$file"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-video" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+HOME_DIR=${HOME:-/home/chip}
+
+load_media() {
+	x-chip-media-on >/tmp/x-chip-media-on.log 2>&1 || {
+		cat /tmp/x-chip-media-on.log >&2 2>/dev/null || true
+		return 1
+	}
+	command -v ffplay >/dev/null 2>&1 || {
+		echo "Video player unavailable: ffplay is not installed." >&2
+		return 1
+	}
+}
+
+list_videos() {
+	for dir in "$HOME_DIR/Videos" "$HOME_DIR/Downloads" "$HOME_DIR"; do
+		[ -d "$dir" ] || continue
+		find "$dir" -maxdepth 2 -type f \( \
+			-name '*.mp4' -o -name '*.MP4' -o \
+			-name '*.m4v' -o -name '*.M4V' -o \
+			-name '*.avi' -o -name '*.AVI' -o \
+			-name '*.mov' -o -name '*.MOV' -o \
+			-name '*.mkv' -o -name '*.MKV' -o \
+			-name '*.webm' -o -name '*.WEBM' -o \
+			-name '*.mpg' -o -name '*.MPG' -o \
+			-name '*.mpeg' -o -name '*.MPEG' \) 2>/dev/null
+	done | awk '!seen[$0]++'
+}
+
+status() {
+	echo "Video"
+	echo "====="
+	command -v ffplay >/dev/null 2>&1 && echo "ffplay: installed" || echo "ffplay: not loaded"
+	count=$(list_videos | wc -l | awk '{print $1}')
+	echo "Video files found: $count"
+}
+
+play_file() {
+	file=$1
+	[ -f "$file" ] || {
+		echo "Not a file: $file" >&2
+		return 1
+	}
+	load_media
+	DISPLAY="$DISPLAY" ffplay -autoexit -window_title "Video" -x 474 -y 212 "$file"
+}
+
+case "${1:-menu}" in
+	status) status; exit 0 ;;
+	stop) pkill -x ffplay 2>/dev/null || killall ffplay 2>/dev/null || true; exit 0 ;;
+	play) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-video play FILE" >&2; exit 2; }; play_file "$1"; exit $? ;;
+esac
+
+if [ "$#" -gt 0 ] && [ "$1" != menu ]; then
+	play_file "$1"
+	exit $?
+fi
+
+tmp=/tmp/x-chip-videos.$$
+trap 'rm -f "$tmp"' EXIT
+list_videos >"$tmp"
+if [ ! -s "$tmp" ]; then
+	echo "No video found in Videos, Downloads, or home."
+	printf 'Video path: '
+	read file || exit 0
+	[ -n "$file" ] && play_file "$file"
+	exit 0
+fi
+
+echo "Videos:"
+awk '{ printf "%2d) %s\n", NR, $0 }' "$tmp"
+echo
+printf 'Play number, or q: '
+read choice || exit 0
+case "$choice" in
+	q|Q|'') exit 0 ;;
+	*[!0-9]*) echo "Invalid selection" >&2; exit 2 ;;
+esac
+file=$(sed -n "${choice}p" "$tmp")
+[ -n "$file" ] || {
+	echo "Invalid selection" >&2
+	exit 2
+}
+play_file "$file"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-desktop-stats" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+HOME_DIR=${HOME:-/home/chip}
+CONFIG=${X_CHIP_CONKY_CONFIG:-$HOME_DIR/.conkyrc}
+
+ensure_conky() {
+	if command -v conky >/dev/null 2>&1; then
+		return 0
+	fi
+	if command -v tce-load >/dev/null 2>&1; then
+		if [ -f /tce/optional/conky.tcz ]; then
+			tce-load -il /tce/optional/conky.tcz >/tmp/x-chip-conky-load.log 2>&1 || true
+		else
+			tce-load -il conky.tcz >/tmp/x-chip-conky-load.log 2>&1 || true
+		fi
+	fi
+	command -v conky >/dev/null 2>&1 || {
+		echo "Desktop stats unavailable: conky is not installed." >&2
+		return 1
+	}
+}
+
+write_config() {
+	mkdir -p "$HOME_DIR"
+	cat >"$CONFIG" <<'CONKY'
+conky.config = {
+	background = false,
+	update_interval = 5,
+	total_run_times = 0,
+	double_buffer = true,
+	use_xft = true,
+	font = 'Sans:size=8',
+	own_window = false,
+	alignment = 'top_left',
+	gap_x = 6,
+	gap_y = 38,
+	minimum_width = 190,
+	maximum_width = 220,
+	draw_shades = false,
+	draw_outline = false,
+	draw_borders = false,
+	draw_graph_borders = false,
+	default_color = 'EAF2EF',
+	color1 = '4FD1C5',
+	color2 = '1F7A66',
+};
+
+conky.text = [[
+${color1}${time %a %d %b  %H:%M}${color}
+${color1}Pocket${color} ${nodename}
+Up ${uptime_short}  Load ${loadavg}
+CPU ${cpu cpu0}% ${freq_g}GHz
+RAM ${memperc}% ${mem}/${memmax}
+Disk ${fs_used /}/${fs_size /}
+WiFi ${addr wlan0}
+Bat ${execi 10 sh -c "cat /sys/class/power_supply/*/capacity 2>/dev/null | head -n 1"}% ${execi 10 sh -c "cat /sys/class/power_supply/*/status 2>/dev/null | head -n 1"}
+]];
+CONKY
+}
+
+is_running() {
+	pgrep -x conky >/dev/null 2>&1
+}
+
+start_stats() {
+	ensure_conky
+	write_config
+	if is_running; then
+		echo "Desktop stats already on"
+		return 0
+	fi
+	DISPLAY="$DISPLAY" conky -c "$CONFIG" -d >/tmp/x-chip-conky.log 2>&1
+	echo "Desktop stats on"
+}
+
+stop_stats() {
+	pkill -x conky 2>/dev/null || killall conky 2>/dev/null || true
+	echo "Desktop stats off"
+}
+
+status() {
+	echo "Desktop Stats"
+	echo "============="
+	if is_running; then
+		echo "Status: on"
+	else
+		echo "Status: off"
+	fi
+	echo "Config: $CONFIG"
+	command -v conky >/dev/null 2>&1 && conky -v 2>/dev/null | sed -n '1p' || echo "conky: not loaded"
+}
+
+case "${1:-toggle}" in
+	on|start) start_stats ;;
+	off|stop) stop_stats ;;
+	toggle)
+		if is_running; then
+			stop_stats
+		else
+			start_stats
+		fi
+		;;
+	status) status ;;
+	*) echo "Usage: x-chip-desktop-stats [on|off|toggle|status]" >&2; exit 2 ;;
+esac
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-logs" <<'EOF'
+#!/bin/sh
+set -eu
+
+show_file() {
+	file=$1
+	lines=${2:-80}
+	echo
+	echo "== $file =="
+	if [ -r "$file" ]; then
+		tail -n "$lines" "$file"
+	else
+		echo "not available"
+	fi
+}
+
+case "${1:-all}" in
+	firstboot) show_file /opt/x-chip-firstboot.log 140 ;;
+	desktop) show_file /var/log/x-chip-desktop.log 140 ;;
+	xorg)
+		show_file /tmp/x-chip-startx.log 100
+		show_file /tmp/x-chip-xorg.log 140
+		show_file /tmp/x-chip-x-calibration.log 80
+		;;
+	wifi)
+		show_file /var/log/wpa_supplicant.log 120
+		for f in /var/log/dhcpcd-*.log /var/log/udhcpc-*.log; do
+			[ -e "$f" ] && show_file "$f" 80
+		done
+		;;
+	system)
+		echo "== dmesg =="
+		dmesg | tail -n 140
+		;;
+	all)
+		show_file /opt/x-chip-firstboot.log 120
+		show_file /var/log/x-chip-desktop.log 120
+		show_file /tmp/x-chip-startx.log 80
+		show_file /tmp/x-chip-xorg.log 100
+		show_file /var/log/wpa_supplicant.log 80
+		show_file /tmp/x-chip-brightness.log 40
+		echo
+		echo "== dmesg =="
+		dmesg | tail -n 80
+		;;
+	*) echo "Usage: x-chip-logs [all|firstboot|desktop|xorg|wifi|system]" >&2; exit 2 ;;
+esac
+
+echo
+echo "Press enter to close."
+read _ || true
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-brightness" <<'EOF'
+#!/bin/sh
+set -eu
+
+CONFIG=${X_CHIP_DISPLAY_CONFIG:-/usr/local/etc/x-chip/display.conf}
+MIN_BRIGHTNESS=${X_CHIP_MIN_BRIGHTNESS:-1}
+
+case "$MIN_BRIGHTNESS" in
+	''|*[!0-9]*) MIN_BRIGHTNESS=1 ;;
+esac
+
+find_backlight() {
+	for p in /sys/class/backlight/*; do
+		[ -d "$p" ] || continue
+		[ -r "$p/max_brightness" ] || continue
+		printf '%s\n' "$p"
+		return 0
+	done
+	return 1
+}
+
+read_num() {
+	sed -n '1{s/[^0-9].*$//; /^[0-9][0-9]*$/p;}' "$1" 2>/dev/null
+}
+
+write_value() {
+	path=$1
+	write_value_value=$2
+	if [ -w "$path" ]; then
+		printf '%s\n' "$write_value_value" >"$path"
+	elif command -v sudo >/dev/null 2>&1; then
+		printf '%s\n' "$write_value_value" | sudo tee "$path" >/dev/null
+	else
+		echo "Need root to write $path" >&2
+		return 1
+	fi
+}
+
+save_config() {
+	value=$1
+	case "$value" in
+		''|*[!0-9]*) value=$MIN_BRIGHTNESS ;;
+	esac
+	[ "$value" -lt "$MIN_BRIGHTNESS" ] && value=$MIN_BRIGHTNESS
+	tmp=/tmp/x-chip-display.conf.$$
+	{
+		echo "LCD_BRIGHTNESS=$value"
+	} >"$tmp"
+	if [ "$(id -u)" = 0 ]; then
+		mkdir -p "$(dirname "$CONFIG")"
+		install -m644 "$tmp" "$CONFIG"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo mkdir -p "$(dirname "$CONFIG")"
+		sudo install -m644 "$tmp" "$CONFIG"
+	else
+		echo "Cannot save $CONFIG without root" >&2
+		rm -f "$tmp"
+		return 1
+	fi
+	rm -f "$tmp"
+	if command -v filetool.sh >/dev/null 2>&1; then
+		filetool.sh -b >/tmp/x-chip-brightness-filetool.log 2>&1 || true
+	fi
+}
+
+load_saved() {
+	[ -r "$CONFIG" ] || return 1
+	sed -n 's/^LCD_BRIGHTNESS=\([0-9][0-9]*\)$/\1/p' "$CONFIG" | head -n 1
+}
+
+clamp() {
+	value=$1
+	max=$2
+	min=$MIN_BRIGHTNESS
+	[ "$max" -lt "$min" ] && min="$max"
+	[ "$value" -lt "$min" ] && value=$min
+	[ "$value" -gt "$max" ] && value=$max
+	printf '%s\n' "$value"
+}
+
+apply_value() {
+	value=$1
+	bl=$(find_backlight) || {
+		echo "No backlight device found" >&2
+		return 1
+	}
+	max=$(read_num "$bl/max_brightness")
+	current=$(read_num "$bl/brightness")
+	[ -n "$max" ] || max=8
+	[ -n "$current" ] || current=0
+	value=$(clamp "$value" "$max")
+	[ -w "$bl/bl_power" ] || [ "$(id -u)" = 0 ] || command -v sudo >/dev/null 2>&1 || true
+	[ -e "$bl/bl_power" ] && write_value "$bl/bl_power" 0 2>/dev/null || true
+	write_value "$bl/brightness" "$value"
+	echo "Brightness: $value/$max"
+}
+
+status() {
+	bl=$(find_backlight) || {
+		echo "No backlight device found"
+		return 0
+	}
+	max=$(read_num "$bl/max_brightness")
+	current=$(read_num "$bl/brightness")
+	saved=$(load_saved 2>/dev/null || true)
+	echo "Backlight: ${bl##*/}"
+	echo "Brightness: ${current:-?}/${max:-?}"
+	[ -n "$saved" ] && echo "Saved: $saved"
+}
+
+step_value() {
+	bl=$(find_backlight) || exit 1
+	max=$(read_num "$bl/max_brightness")
+	current=$(read_num "$bl/brightness")
+	[ -n "$max" ] || max=8
+	[ -n "$current" ] || current=0
+	step=$((max / 8))
+	[ "$step" -lt 1 ] && step=1
+	case "$1" in
+		up) next=$((current + step)) ;;
+		down) next=$((current - step)) ;;
+	esac
+	next=$(clamp "$next" "$max")
+	apply_value "$next"
+	save_config "$next" || true
+}
+
+menu() {
+	while :; do
+		clear 2>/dev/null || true
+		status
+		echo
+		echo "1) Dim (min $MIN_BRIGHTNESS)"
+		echo "2) Brighter"
+		echo "3) Set value ($MIN_BRIGHTNESS-max)"
+		echo "4) Apply saved"
+		echo "5) Default 6"
+		echo "q) Quit"
+		printf '> '
+		read choice || exit 0
+		case "$choice" in
+			1) step_value down ;;
+			2) step_value up ;;
+			3)
+				printf 'Brightness value: '
+				read value || continue
+				case "$value" in
+					''|*[!0-9]*) echo "Invalid value"; sleep 1; continue ;;
+				esac
+				[ "$value" -lt "$MIN_BRIGHTNESS" ] && value=$MIN_BRIGHTNESS
+				apply_value "$value"
+				save_config "$value" || true
+				;;
+			4)
+				value=$(load_saved 2>/dev/null || true)
+				[ -n "$value" ] && apply_value "$value" || echo "No saved value"
+				;;
+			5)
+				apply_value 6
+				save_config 6 || true
+				;;
+			q|Q) exit 0 ;;
+		esac
+		sleep 1
+	done
+}
+
+cmd=${1:-status}
+case "$cmd" in
+	up|+) step_value up ;;
+	down|-) step_value down ;;
+	set)
+		value=${2:-}
+		case "$value" in
+			''|*[!0-9]*) echo "Usage: x-chip-brightness set VALUE" >&2; exit 2 ;;
+		esac
+		[ "$value" -lt "$MIN_BRIGHTNESS" ] && value=$MIN_BRIGHTNESS
+		apply_value "$value"
+		save_config "$value" || true
+		;;
+	apply)
+		value=$(load_saved 2>/dev/null || true)
+		[ -n "$value" ] || value=${LCD_BRIGHTNESS:-6}
+		apply_value "$value"
+		;;
+	menu) menu ;;
+	status) status ;;
+	*) echo "Usage: x-chip-brightness [status|up|down|set VALUE|apply|menu]" >&2; exit 2 ;;
+esac
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-wifi-menu" <<'EOF'
+#!/bin/sh
+set -eu
+
+COUNTRY=${WIFI_COUNTRY:-PT}
+HOSTNAME_VALUE=$(cat /etc/hostname 2>/dev/null || hostname 2>/dev/null || echo chip)
+CONF=${X_CHIP_WIFI_CONFIG:-/etc/wpa_supplicant.conf}
+ROLE_CONFIG=${X_CHIP_WIFI_ROLE_CONFIG:-/usr/local/etc/x-chip/wifi.conf}
+CLIENT_DRIVER=rtl8723bs
+SCAN_DRIVER=rtl8812au
+
+[ -r "$ROLE_CONFIG" ] && . "$ROLE_CONFIG"
+CLIENT_DRIVER=${X_CHIP_WIFI_CLIENT_DRIVER:-$CLIENT_DRIVER}
+SCAN_DRIVER=${X_CHIP_WIFI_SCAN_DRIVER:-$SCAN_DRIVER}
+CLIENT_IFACE=${X_CHIP_WIFI_CLIENT_IFACE:-}
+SCAN_IFACE=${X_CHIP_WIFI_SCAN_IFACE:-}
+
+all_wifi_ifaces() {
+	for iface_path in /sys/class/net/wlan* /sys/class/net/wlp*; do
+		[ -e "$iface_path" ] || continue
+		iface=${iface_path##*/}
+		case "$iface" in *mon) continue ;; esac
+		printf '%s\n' "$iface"
+	done
+}
+
+iface_driver() {
+	iface=$1
+	driver=
+	if [ -r "/sys/class/net/$iface/device/uevent" ]; then
+		driver=$(sed -n 's/^DRIVER=//p' "/sys/class/net/$iface/device/uevent" | head -n 1)
+	fi
+	if [ -z "$driver" ] && [ -L "/sys/class/net/$iface/device/driver" ]; then
+		driver_path=$(readlink "/sys/class/net/$iface/device/driver" 2>/dev/null || true)
+		driver=${driver_path##*/}
+	fi
+	printf '%s\n' "$driver"
+}
+
+default_route_iface() {
+	if command -v ip >/dev/null 2>&1; then
+		ip route 2>/dev/null | awk '$1 == "default" { print $5; exit }'
+	else
+		route -n 2>/dev/null | awk '$1 == "0.0.0.0" { print $8; exit }'
+	fi
+}
+
+find_iface_by_driver() {
+	want=$1
+	[ -n "$want" ] || return 1
+	for iface in $(all_wifi_ifaces); do
+		[ "$(iface_driver "$iface")" = "$want" ] || continue
+		printf '%s\n' "$iface"
+		return 0
+	done
+	return 1
+}
+
+find_client_wifi_iface() {
+	if [ -n "$CLIENT_IFACE" ] && [ -e "/sys/class/net/$CLIENT_IFACE" ]; then
+		printf '%s\n' "$CLIENT_IFACE"
+		return 0
+	fi
+	find_iface_by_driver "$CLIENT_DRIVER" && return 0
+	route_iface=$(default_route_iface 2>/dev/null || true)
+	if [ -n "$route_iface" ] && [ -e "/sys/class/net/$route_iface" ]; then
+		printf '%s\n' "$route_iface"
+		return 0
+	fi
+	all_wifi_ifaces | head -n 1
+}
+
+find_scan_wifi_iface() {
+	client=$(find_client_wifi_iface 2>/dev/null || true)
+	if [ -n "$SCAN_IFACE" ] && [ -e "/sys/class/net/$SCAN_IFACE" ] && [ "$SCAN_IFACE" != "$client" ]; then
+		printf '%s\n' "$SCAN_IFACE"
+		return 0
+	fi
+	for iface in $(all_wifi_ifaces); do
+		[ "$iface" = "$client" ] && continue
+		[ "$(iface_driver "$iface")" = "$SCAN_DRIVER" ] || continue
+		printf '%s\n' "$iface"
+		return 0
+	done
+	for iface in $(all_wifi_ifaces); do
+		[ "$iface" = "$client" ] && continue
+		printf '%s\n' "$iface"
+		return 0
+	done
+	[ -n "$client" ] && printf '%s\n' "$client"
+}
+
+ensure_client_wifi() {
+	modprobe r8723bs rtw_power_mgnt=0 rtw_ips_mode=0 2>/dev/null || modprobe r8723bs 2>/dev/null || true
+	rfkill unblock wifi 2>/dev/null || true
+	i=0
+	while [ "$i" -lt 15 ]; do
+		iface=$(find_client_wifi_iface 2>/dev/null || true)
+		[ -n "${iface:-}" ] && break
+		i=$((i + 1))
+		sleep 1
+	done
+	[ -n "${iface:-}" ] || {
+		echo "No WiFi interface found"
+		return 1
+	}
+	ip link set "$iface" up 2>/dev/null || ifconfig "$iface" up 2>/dev/null || true
+	printf '%s\n' "$iface"
+}
+
+ensure_scan_wifi() {
+	modprobe 8812au 2>/dev/null || true
+	rfkill unblock wifi 2>/dev/null || true
+	i=0
+	while [ "$i" -lt 10 ]; do
+		iface=$(find_scan_wifi_iface 2>/dev/null || true)
+		[ -n "${iface:-}" ] && break
+		i=$((i + 1))
+		sleep 1
+	done
+	[ -n "${iface:-}" ] || {
+		echo "No external scan WiFi interface found"
+		return 1
+	}
+	ip link set "$iface" up 2>/dev/null || ifconfig "$iface" up 2>/dev/null || true
+	printf '%s\n' "$iface"
+}
+
+scan_with_iw() {
+	iface=$1
+	iw_scan "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*SSID: //p' | sed '/^$/d' | sort -u
+}
+
+iw_scan() {
+	iface=$1
+	if [ "$(id -u)" = 0 ]; then
+		iw dev "$iface" scan
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo iw dev "$iface" scan
+	else
+		iw dev "$iface" scan
+	fi
+}
+
+scan_with_iw_verbose() {
+	iface=$1
+	iw_scan "$iface" 2>/dev/null | awk '
+		/^BSS / { ssid = ""; signal = ""; freq = ""; next }
+		/^[[:space:]]*freq:/ { freq = $2 }
+		/^[[:space:]]*signal:/ { signal = $2 " " $3 }
+		/^[[:space:]]*SSID:/ {
+			sub(/^[[:space:]]*SSID: /, "")
+			ssid = $0
+			if (ssid != "") printf "%-28s %9s %s MHz\n", ssid, signal, freq
+		}
+	'
+}
+
+scan_with_iwlist() {
+	iface=$1
+	iwlist "$iface" scan 2>/dev/null | sed -n 's/.*ESSID:"\(.*\)".*/\1/p' | sed '/^$/d' | sort -u
+}
+
+scan_networks() {
+	iface=$1
+	scan_with_iw "$iface" || scan_with_iwlist "$iface" || true
+}
+
+scan_report() {
+	iface=${1:-}
+	[ -n "$iface" ] || iface=$(ensure_scan_wifi)
+	echo "Scan interface: $iface ($(iface_driver "$iface"))"
+	echo
+	if command -v iw >/dev/null 2>&1; then
+		scan_with_iw_verbose "$iface" || true
+	else
+		scan_with_iwlist "$iface" || true
+	fi
+}
+
+escape_conf() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+write_root_file() {
+	tmp=$1
+	dest=$2
+	if [ "$(id -u)" = 0 ]; then
+		install -m600 "$tmp" "$dest"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo install -m600 "$tmp" "$dest"
+	else
+		echo "Need root to write $dest" >&2
+		return 1
+	fi
+}
+
+save_network() {
+	ssid=$1
+	psk=$2
+	tmp=/tmp/x-chip-wpa.$$
+	ssid_escaped=$(escape_conf "$ssid")
+	{
+		echo "ctrl_interface=/var/run/wpa_supplicant"
+		echo "update_config=1"
+		echo "country=$COUNTRY"
+		echo
+		echo "network={"
+		echo "	ssid=\"$ssid_escaped\""
+		if [ -n "$psk" ]; then
+			psk_escaped=$(escape_conf "$psk")
+			echo "	psk=\"$psk_escaped\""
+			echo "	key_mgmt=WPA-PSK"
+		else
+			echo "	key_mgmt=NONE"
+		fi
+		echo "}"
+	} >"$tmp"
+	write_root_file "$tmp" "$CONF"
+	rm -f "$tmp"
+	if command -v filetool.sh >/dev/null 2>&1; then
+		filetool.sh -b >/tmp/x-chip-wifi-filetool.log 2>&1 || true
+	fi
+}
+
+restart_wifi() {
+	iface=$1
+	if command -v wpa_cli >/dev/null 2>&1; then
+		wpa_cli -i "$iface" terminate >/dev/null 2>&1 || true
+	else
+		killall wpa_supplicant >/dev/null 2>&1 || true
+	fi
+	sleep 1
+	wpa_supplicant -B -i "$iface" -c "$CONF" >/var/log/wpa_supplicant.log 2>&1 || {
+		echo "wpa_supplicant failed; see /var/log/wpa_supplicant.log"
+		return 1
+	}
+	if command -v dhcpcd >/dev/null 2>&1; then
+		dhcpcd -q -t 20 "$iface" >/var/log/dhcpcd-"$iface".log 2>&1 || true
+	elif command -v udhcpc >/dev/null 2>&1; then
+		udhcpc -i "$iface" -x "hostname:$HOSTNAME_VALUE" -b >/var/log/udhcpc-"$iface".log 2>&1 || true
+	fi
+}
+
+show_status() {
+	iface=$(find_client_wifi_iface 2>/dev/null || true)
+	echo "Client interface: ${iface:-none}"
+	if [ -n "${iface:-}" ]; then
+		echo "Driver: $(iface_driver "$iface")"
+		if command -v ip >/dev/null 2>&1; then
+			ip addr show "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet /IPv4: /p' | head -n 1 || true
+		elif command -v ifconfig >/dev/null 2>&1; then
+			ifconfig "$iface" 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/IPv4: \1/p; s/.*inet \([0-9.][0-9.]*\).*/IPv4: \1/p' | head -n 1 || true
+		fi
+		iw dev "$iface" link 2>/dev/null || true
+	fi
+	[ -r "$CONF" ] && sed -n 's/^[[:space:]]*ssid="\([^"]*\)".*/Saved SSID: \1/p' "$CONF" | head -n 1
+}
+
+show_interfaces() {
+	client=$(find_client_wifi_iface 2>/dev/null || true)
+	scan=$(find_scan_wifi_iface 2>/dev/null || true)
+	route_iface=$(default_route_iface 2>/dev/null || true)
+	echo "WiFi Roles"
+	echo "=========="
+	echo "Client driver: $CLIENT_DRIVER"
+	echo "Scan driver:   $SCAN_DRIVER"
+	echo "Client iface:  ${client:-none}"
+	echo "Scan iface:    ${scan:-none}"
+	echo "Default route: ${route_iface:-none}"
+	echo
+	for iface in $(all_wifi_ifaces); do
+		role=spare
+		[ "$iface" = "$client" ] && role=client
+		[ "$iface" = "$scan" ] && [ "$iface" != "$client" ] && role=scan
+		echo "$iface  role=$role  driver=$(iface_driver "$iface")"
+		if command -v ip >/dev/null 2>&1; then
+			ip addr show "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet /  IPv4: /p' | head -n 1 || true
+		else
+			ifconfig "$iface" 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/  IPv4: \1/p; s/.*inet \([0-9.][0-9.]*\).*/  IPv4: \1/p' | head -n 1 || true
+		fi
+		iw dev "$iface" link 2>/dev/null | sed 's/^/  /' || true
+		echo
+	done
+}
+
+connect_menu() {
+	iface=$(ensure_client_wifi) || {
+		echo "Press enter to exit."
+		read _ || true
+		exit 1
+	}
+	tmp=/tmp/x-chip-wifi-scan.$$
+	scan_networks "$iface" >"$tmp"
+	if [ ! -s "$tmp" ]; then
+		echo "No networks found."
+		echo "Press enter to rescan or type an SSID manually."
+		read ssid || ssid=
+	else
+		echo "Networks:"
+		awk '{ printf "%2d) %s\n", NR, $0 }' "$tmp"
+		echo
+		echo "Type number, r to rescan, m for manual SSID, q to quit."
+		printf '> '
+		read choice || choice=q
+		case "$choice" in
+			q|Q) rm -f "$tmp"; exit 0 ;;
+			r|R) rm -f "$tmp"; exec "$0" ;;
+			m|M)
+				printf 'SSID: '
+				read ssid || ssid=
+				;;
+			*[!0-9]*|'')
+				echo "Invalid selection"
+				rm -f "$tmp"
+				sleep 1
+				exec "$0"
+				;;
+			*)
+				ssid=$(sed -n "${choice}p" "$tmp")
+				;;
+		esac
+	fi
+	rm -f "$tmp"
+	[ -n "${ssid:-}" ] || exit 0
+	printf 'Password for "%s" (empty for open network): ' "$ssid"
+	stty -echo 2>/dev/null || true
+	read psk || psk=
+	stty echo 2>/dev/null || true
+	echo
+	save_network "$ssid" "$psk"
+	echo "Saved $ssid"
+	restart_wifi "$iface" || true
+	echo
+	show_status
+	echo
+	echo "Press enter to close."
+	read _ || true
+}
+
+case "${1:-menu}" in
+	menu) connect_menu ;;
+	status) show_status ;;
+	interfaces) show_interfaces ;;
+	scan|scan-external)
+		iface=$(ensure_scan_wifi)
+		scan_report "$iface"
+		;;
+	scan-client)
+		iface=$(ensure_client_wifi)
+		scan_report "$iface"
+		;;
+	restart)
+		iface=$(ensure_client_wifi)
+		restart_wifi "$iface"
+		;;
+	client-iface) find_client_wifi_iface ;;
+	scan-iface) find_scan_wifi_iface ;;
+	*) echo "Usage: x-chip-wifi-menu [menu|status|interfaces|scan|scan-external|scan-client|restart|client-iface|scan-iface]" >&2; exit 2 ;;
+esac
+EOF
+}
+
+install_media_tools() {
+    need_root install -d "$RFS/usr/local/bin"
+    need_root install -d "$RFS/home/$SSH_USER/Pictures" "$RFS/home/$SSH_USER/Videos" \
+        "$RFS/home/$SSH_USER/Music" "$RFS/home/$SSH_USER/Downloads"
+    need_root chown "$SSH_UID:$SSH_GID" "$RFS/home/$SSH_USER/Pictures" "$RFS/home/$SSH_USER/Videos" \
+        "$RFS/home/$SSH_USER/Music" "$RFS/home/$SSH_USER/Downloads"
+    install_text 0755 "$RFS/usr/local/bin/x-chip-media-on" <<'EOF'
+#!/bin/sh
+set -eu
+
+MEDIA_LIST=/tce/media.lst
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
+
+scrub_kernel_placeholder_deps() {
+	for depfile in /tce/optional/*.tcz.dep; do
+		[ -f "$depfile" ] || continue
+		grep -q KERNEL "$depfile" 2>/dev/null || continue
+		tmp="/tmp/${depfile##*/}.clean"
+		grep -v KERNEL "$depfile" >"$tmp" || true
+		install -m644 "$tmp" "$depfile"
+		rm -f "$tmp"
+	done
+}
+
+load_tcz_one() {
+	ext="$1"
+	case "$ext" in
+		''|\#*) return 0 ;;
+	esac
+	case "$ext" in
+		*.tcz) ;;
+		*) ext="$ext.tcz" ;;
+	esac
+	scrub_kernel_placeholder_deps
+	if [ -f "/tce/optional/$ext" ]; then
+		target="/tce/optional/$ext"
+	else
+		target="$ext"
+	fi
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
+	else
+		tce-load -il "$target"
+	fi
+}
+
+[ -f "$MEDIA_LIST" ] || {
+	echo "missing $MEDIA_LIST" >&2
+	exit 1
+}
+
+command -v tce-load >/dev/null 2>&1 || {
+	echo "missing tce-load" >&2
+	exit 1
+}
+
+while IFS= read -r ext; do
+	ext=${ext%%#*}
+	ext=${ext%%[[:space:]]*}
+	load_tcz_one "$ext"
+done < "$MEDIA_LIST"
+
+command -v ffplay >/dev/null 2>&1 || {
+	echo "ffplay unavailable" >&2
+	exit 1
+}
+
+echo "media ready"
+EOF
+}
+
+install_xorg_desktop_tools() {
+    need_root install -d "$RFS/usr/local/bin" \
+        "$RFS/usr/local/etc/X11/xorg.conf.d" \
+        "$RFS/etc/X11/xorg.conf.d" \
+        "$RFS/usr/local/share/x-chip/xorg" \
+        "$RFS/usr/local/share/x-chip/xorg/wallpapers"
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-startx" <<'EOF'
+#!/bin/sh
+set -eu
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+XORG_LIST=/tce/xorg.lst
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
+LOG=/tmp/x-chip-startx.log
+X_CHIP_WM="${X_CHIP_WM:-jwm}"
+X_CHIP_VT="${X_CHIP_VT:-2}"
+
+case "$X_CHIP_WM" in
+	flwm|jwm) ;;
+	*) X_CHIP_WM=jwm ;;
+esac
+
+scrub_kernel_placeholder_deps() {
+	for depfile in /tce/optional/*.tcz.dep; do
+		[ -f "$depfile" ] || continue
+		grep -q KERNEL "$depfile" 2>/dev/null || continue
+		tmp="/tmp/${depfile##*/}.clean"
+		grep -v KERNEL "$depfile" >"$tmp" || true
+		install -m644 "$tmp" "$depfile"
+		rm -f "$tmp"
+	done
+}
+
+extension_ready() {
+	ext="$1"
+	app="${ext%.tcz}"
+	[ -e "/usr/local/tce.installed/$app" ] && return 0
+	case "$app" in
+		Xorg)
+			command -v Xorg >/dev/null 2>&1 && command -v xinput >/dev/null 2>&1
+			;;
+		xf86-video-fbdev)
+			[ -e /usr/local/lib/xorg/modules/drivers/fbdev_drv.so ]
+			;;
+		flwm|jwm|aterm|xrandr|xinput)
+			command -v "$app" >/dev/null 2>&1
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+load_tcz_one() {
+	ext="$1"
+	case "$ext" in
+		''|\#*) return 0 ;;
+	esac
+	case "$ext" in
+		*.tcz) ;;
+		*) ext="$ext.tcz" ;;
+	esac
+	extension_ready "$ext" && return 0
+	scrub_kernel_placeholder_deps
+	if [ -f "/tce/optional/$ext" ]; then
+		target="/tce/optional/$ext"
+	else
+		target="$ext"
+	fi
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
+	else
+		tce-load -il "$target"
+	fi
+}
+
+load_xorg_stack() {
+	[ -f "$XORG_LIST" ] || {
+		echo "missing $XORG_LIST" >&2
+		exit 1
+	}
+	command -v tce-load >/dev/null 2>&1 || {
+		echo "missing tce-load" >&2
+		exit 1
+	}
+	while IFS= read -r ext; do
+		ext=${ext%%#*}
+		set -- $ext
+		ext=${1:-}
+		load_tcz_one "$ext"
+	done < "$XORG_LIST"
+}
+
+user_home() {
+	awk -F: -v user="$TC_USER" '$1 == user { print $6; found = 1 } END { exit found ? 0 : 1 }' /etc/passwd 2>/dev/null || \
+		printf '/home/%s\n' "$TC_USER"
+}
+
+install_user_desktop_config() {
+	home="$(user_home)"
+	mkdir -p "$home"
+	cp /usr/local/share/x-chip/xorg/jwmrc "$home/.jwmrc"
+	mkdir -p "$home/.config/geany" "$home/.config/leafpad" \
+		"$home/.config/pcmanfm/default" "$home/.config/gtk-3.0" "$home/.dillo"
+	[ -f "$home/.config/geany/geany.conf" ] || \
+		cp /usr/local/share/x-chip/xorg/geany.conf "$home/.config/geany/geany.conf"
+	[ -f "$home/.config/leafpad/leafpadrc" ] || \
+		cp /usr/local/share/x-chip/xorg/leafpadrc "$home/.config/leafpad/leafpadrc"
+	[ -f "$home/.config/pcmanfm/default/pcmanfm.conf" ] || \
+		cp /usr/local/share/x-chip/xorg/pcmanfm.conf "$home/.config/pcmanfm/default/pcmanfm.conf"
+	[ -f "$home/.dillo/dillorc" ] || \
+		cp /usr/local/share/x-chip/xorg/dillorc "$home/.dillo/dillorc"
+	[ -f "$home/.gtkrc-2.0" ] || \
+		cp /usr/local/share/x-chip/xorg/gtkrc-2.0 "$home/.gtkrc-2.0"
+	[ -f "$home/.config/gtk-3.0/settings.ini" ] || \
+		cp /usr/local/share/x-chip/xorg/gtk3-settings.ini "$home/.config/gtk-3.0/settings.ini"
+	if id "$TC_USER" >/dev/null 2>&1; then
+		chown -R "$TC_USER":"$TC_USER" "$home/.jwmrc" "$home/.config" "$home/.dillo" "$home/.gtkrc-2.0" 2>/dev/null || true
+	fi
+}
+
+wait_for_x_ready() {
+	i=0
+	while [ "$i" -lt 45 ]; do
+		DISPLAY=:0 xinput list >/dev/null 2>&1 && return 0
+		DISPLAY=:0 xset q >/dev/null 2>&1 && return 0
+		i=$((i + 1))
+		sleep 1
+	done
+	return 1
+}
+
+start_x_session() {
+	echo "Starting Xorg desktop session on VT$X_CHIP_VT; log: $LOG"
+	if [ -S /tmp/.X11-unix/X0 ]; then
+		wait_for_x_ready || true
+		DISPLAY=:0 x-chip-x-apply-calibration >/tmp/x-chip-x-calibration.log 2>&1 || true
+		DISPLAY=:0 jwm -restart >/tmp/jwm-restart.log 2>&1 || true
+		exit 0
+	fi
+	rm -f "$LOG" 2>/dev/null || sudo rm -f "$LOG" 2>/dev/null || true
+	if [ "$(id -u)" = 0 ]; then
+		env TC_USER="$TC_USER" X_CHIP_WM="$X_CHIP_WM" X_CHIP_VT="$X_CHIP_VT" \
+			setsid openvt -c "$X_CHIP_VT" -- /usr/local/bin/x-chip-xorg-launch-vt >"$LOG" 2>&1 &
+		sleep 2
+		chvt "$X_CHIP_VT" >/dev/null 2>&1 || true
+		exit 0
+	fi
+	sudo env TC_USER="$TC_USER" X_CHIP_WM="$X_CHIP_WM" X_CHIP_VT="$X_CHIP_VT" \
+		setsid openvt -c "$X_CHIP_VT" -- /usr/local/bin/x-chip-xorg-launch-vt >"$LOG" 2>&1 &
+	sleep 2
+	sudo chvt "$X_CHIP_VT" >/dev/null 2>&1 || true
+}
+
+load_xorg_stack
+install_user_desktop_config
+start_x_session
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-desktop-start" <<'EOF'
+#!/bin/sh
+set -eu
+
+CONFIG=${X_CHIP_DESKTOP_CONFIG:-/usr/local/etc/x-chip/desktop.conf}
+AUTOSTART=1
+WM=jwm
+VT=2
+
+if [ -r "$CONFIG" ]; then
+	# shellcheck disable=SC1090
+	. "$CONFIG"
+	AUTOSTART=${X_CHIP_DESKTOP_AUTOSTART:-$AUTOSTART}
+	WM=${X_CHIP_DESKTOP_WM:-$WM}
+	VT=${X_CHIP_DESKTOP_VT:-$VT}
+fi
+
+case "$WM" in
+	jwm|flwm) ;;
+	*) WM=jwm ;;
+esac
+case "$VT" in
+	''|*[!0-9]*) VT=2 ;;
+esac
+
+if [ "${1:-}" = "--boot" ]; then
+	case "$AUTOSTART" in
+		1|yes|true|on) ;;
+		*) echo "Desktop autostart disabled in $CONFIG"; exit 0 ;;
+	esac
+fi
+
+exec env X_CHIP_WM="$WM" X_CHIP_VT="$VT" /usr/local/bin/x-chip-startx
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-close-app" <<'EOF'
+#!/bin/sh
+set -eu
+
+close_one() {
+	name=$1
+	pkill "$name" 2>/dev/null || true
+	sleep 1
+	pkill -9 "$name" 2>/dev/null || true
+}
+
+case "${1:-all}" in
+	files|pcmanfm) close_one pcmanfm ;;
+	web|dillo) close_one dillo ;;
+	code|geany) close_one geany ;;
+	edit|leafpad) close_one leafpad ;;
+	image|gpicview) close_one gpicview ;;
+	video|ffplay) close_one ffplay ;;
+	music|mpg123) close_one mpg123 ;;
+	all)
+		for app in pcmanfm dillo geany leafpad gpicview ffplay mpg123; do
+			close_one "$app"
+		done
+		;;
+	*) echo "Usage: x-chip-close-app [all|files|web|code|edit|image|video|music]" >&2; exit 2 ;;
+esac
+
+DISPLAY=${DISPLAY:-:0} jwm -restart 2>/dev/null || true
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-x-apply-calibration" <<'EOF'
+#!/bin/sh
+set -eu
+
+MATRIX_FILE=${X_CHIP_TOUCH_MATRIX_FILE:-/usr/local/share/x-chip/xorg/touchscreen-calibration.matrix}
+DEVICE=${X_CHIP_TOUCH_DEVICE:-1c25000.rtp}
+
+[ -n "${DISPLAY:-}" ] || exit 0
+[ -f "$MATRIX_FILE" ] || exit 0
+command -v xinput >/dev/null 2>&1 || exit 0
+
+matrix="$(sed -n 's/#.*//; /^[[:space:]]*$/d; p; q' "$MATRIX_FILE")"
+[ -n "$matrix" ] || exit 0
+
+if command -v timeout >/dev/null 2>&1; then
+	timeout 5 xinput set-prop "$DEVICE" "libinput Calibration Matrix" $matrix 2>/dev/null || \
+		timeout 5 xinput set-prop "$DEVICE" "Coordinate Transformation Matrix" $matrix 2>/dev/null || true
+else
+	xinput set-prop "$DEVICE" "libinput Calibration Matrix" $matrix 2>/dev/null || \
+		xinput set-prop "$DEVICE" "Coordinate Transformation Matrix" $matrix 2>/dev/null || true
+fi
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-touch-calibrate" <<'EOF'
+#!/bin/sh
+set -eu
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+DISPLAY=${DISPLAY:-:0}
+DEVICE=${X_CHIP_TOUCH_DEVICE:-1c25000.rtp}
+MATRIX_FILE=${X_CHIP_TOUCH_MATRIX_FILE:-/usr/local/share/x-chip/xorg/touchscreen-calibration.matrix}
+LOG=${X_CHIP_TOUCH_CALIBRATION_LOG:-/tmp/x-chip-touch-calibrate.log}
+WIDTH=${X_CHIP_SCREEN_WIDTH:-480}
+HEIGHT=${X_CHIP_SCREEN_HEIGHT:-272}
+MARGIN=${X_CHIP_CALIBRATION_MARGIN:-64}
+RAW_RANGE=${X_CHIP_TOUCH_RAW_RANGE:-65535}
+TAP_TIMEOUT=${X_CHIP_CALIBRATION_TAP_TIMEOUT:-90}
+TAP_RETRIES=${X_CHIP_CALIBRATION_TAP_RETRIES:-3}
+SAMPLES_PER_TARGET=${X_CHIP_CALIBRATION_SAMPLES:-3}
+TARGET_COLS=${X_CHIP_CALIBRATION_TARGET_COLS:-9}
+TARGET_ROWS=${X_CHIP_CALIBRATION_TARGET_ROWS:-4}
+TARGET_PIXEL_WIDTH=${X_CHIP_CALIBRATION_TARGET_PIXEL_WIDTH:-96}
+TARGET_PIXEL_HEIGHT=${X_CHIP_CALIBRATION_TARGET_PIXEL_HEIGHT:-62}
+FBDEV=${X_CHIP_FRAMEBUFFER:-/dev/fb0}
+
+export DISPLAY
+
+need_cmd() {
+	command -v "$1" >/dev/null 2>&1 || {
+		echo "missing command: $1" >&2
+		exit 1
+	}
+}
+
+wait_for_x_ready() {
+	i=0
+	while [ "$i" -lt 45 ]; do
+		xinput list >/dev/null 2>&1 && return 0
+		xset q >/dev/null 2>&1 && return 0
+		i=$((i + 1))
+		sleep 1
+	done
+	return 1
+}
+
+set_identity_matrix() {
+	xinput set-prop "$DEVICE" "libinput Calibration Matrix" 1 0 0 0 1 0 0 0 1 2>/dev/null || \
+		xinput set-prop "$DEVICE" "Coordinate Transformation Matrix" 1 0 0 0 1 0 0 0 1 2>/dev/null || true
+}
+
+fb_bpp() {
+	cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null || echo 32
+}
+
+fb_line_length() {
+	cat /sys/class/graphics/fb0/stride 2>/dev/null || echo $((WIDTH * $(fb_bpp) / 8))
+}
+
+clamp_coord() {
+	value="$1"
+	max="$2"
+	[ "$value" -lt 0 ] && value=0
+	[ "$value" -gt "$max" ] && value=$max
+	echo "$value"
+}
+
+write_white_pixel() {
+	case "$(fb_bpp)" in
+		32) printf '\377\377\377\377' ;;
+		24) printf '\377\377\377' ;;
+		16) printf '\377\377' ;;
+		8) printf '\377' ;;
+		*) printf '\377\377\377\377' ;;
+	esac
+}
+
+make_white_line() {
+	count="$1"
+	out="$2"
+	: >"$out"
+	i=0
+	while [ "$i" -lt "$count" ]; do
+		write_white_pixel >>"$out"
+		i=$((i + 1))
+	done
+}
+
+fb_write_file() {
+	file="$1"
+	offset="$2"
+	dd if="$file" of="$FBDEV" bs=1 seek="$offset" conv=notrunc 2>/dev/null || true
+}
+
+fb_hline() {
+	x1="$(clamp_coord "$1" $((WIDTH - 1)))"
+	x2="$(clamp_coord "$2" $((WIDTH - 1)))"
+	y="$(clamp_coord "$3" $((HEIGHT - 1)))"
+	[ "$x1" -gt "$x2" ] && { tmpx="$x1"; x1="$x2"; x2="$tmpx"; }
+	bytes_per_pixel=$(( $(fb_bpp) / 8 ))
+	line_length="$(fb_line_length)"
+	count=$((x2 - x1 + 1))
+	line_file="/tmp/x-chip-calibration-line.$$"
+	make_white_line "$count" "$line_file"
+	fb_write_file "$line_file" $((y * line_length + x1 * bytes_per_pixel))
+	rm -f "$line_file"
+}
+
+fb_vline() {
+	x="$(clamp_coord "$1" $((WIDTH - 1)))"
+	y1="$(clamp_coord "$2" $((HEIGHT - 1)))"
+	y2="$(clamp_coord "$3" $((HEIGHT - 1)))"
+	[ "$y1" -gt "$y2" ] && { tmpy="$y1"; y1="$y2"; y2="$tmpy"; }
+	bytes_per_pixel=$(( $(fb_bpp) / 8 ))
+	line_length="$(fb_line_length)"
+	pixel_file="/tmp/x-chip-calibration-pixel.$$"
+	write_white_pixel >"$pixel_file"
+	y="$y1"
+	while [ "$y" -le "$y2" ]; do
+		fb_write_file "$pixel_file" $((y * line_length + x * bytes_per_pixel))
+		y=$((y + 1))
+	done
+	rm -f "$pixel_file"
+}
+
+draw_framebuffer_target() {
+	target_x="$1"
+	target_y="$2"
+	radius=18
+	inner=5
+	fb_hline $((target_x - radius)) $((target_x - inner)) "$target_y"
+	fb_hline $((target_x + inner)) $((target_x + radius)) "$target_y"
+	fb_vline "$target_x" $((target_y - radius)) $((target_y - inner))
+	fb_vline "$target_x" $((target_y + inner)) $((target_y + radius))
+	fb_hline $((target_x - 3)) $((target_x + 3)) "$target_y"
+	fb_vline "$target_x" $((target_y - 3)) $((target_y + 3))
+}
+
+draw_window_target() {
+	label="$1"
+	target_x="$2"
+	target_y="$3"
+	left=$((target_x - TARGET_PIXEL_WIDTH / 2))
+	top=$((target_y - TARGET_PIXEL_HEIGHT / 2))
+	max_left=$((WIDTH - TARGET_PIXEL_WIDTH))
+	max_top=$((HEIGHT - TARGET_PIXEL_HEIGHT))
+	[ "$max_left" -lt 0 ] && max_left=0
+	[ "$max_top" -lt 0 ] && max_top=0
+	[ "$left" -lt 0 ] && left=0
+	[ "$top" -lt 0 ] && top=0
+	[ "$left" -gt "$max_left" ] && left=$max_left
+	[ "$top" -gt "$max_top" ] && top=$max_top
+	kill "$target_pid" 2>/dev/null || true
+	geom="${TARGET_COLS}x${TARGET_ROWS}+${left}+${top}"
+	aterm -bg white -fg black -geometry "$geom" -title "$label" \
+		-e sh -c 'printf "\n   X\n  TAP\n"; sleep "$1"' sh "$TAP_TIMEOUT" \
+		>/tmp/x-chip-calibration-target.log 2>&1 &
+	target_pid=$!
+}
+
+draw_target() {
+	label="$1"
+	target_x="$2"
+	target_y="$3"
+	clear_framebuffer
+	draw_framebuffer_target "$target_x" "$target_y"
+	sleep 1
+}
+
+clear_framebuffer() {
+	[ -w "$FBDEV" ] || {
+		echo "$FBDEV is not writable; cannot draw calibration target" >&2
+		return 1
+	}
+	line_length="$(fb_line_length)"
+	size=$((line_length * HEIGHT))
+	dd if=/dev/zero of="$FBDEV" bs="$size" count=1 conv=notrunc 2>/dev/null || true
+}
+
+stop_desktop_windows() {
+	pkill -x aterm 2>/dev/null || true
+	sleep 1
+}
+
+start_desktop_windows() {
+	if ! pgrep -x aterm >/dev/null 2>&1; then
+		aterm >/tmp/aterm.log 2>&1 &
+	fi
+}
+
+extract_point() {
+	awk '
+		/EVENT type 22/ { touch=1; x=""; next }
+		touch && $1 == "0:" { x=$2; next }
+		touch && x != "" && $1 == "1:" { print x, $2; exit }
+	' "$1"
+}
+
+capture_tap() {
+	label="$1"
+	target_x="$2"
+	target_y="$3"
+	out="/tmp/x-chip-calibration-$label.out"
+	rm -f "$out"
+	draw_target "$label" "$target_x" "$target_y"
+	echo "Tap $label on the PocketCHIP screen..." >&2
+	xinput test-xi2 --root "$DEVICE" >"$out" 2>>"$LOG" &
+	xinput_pid=$!
+	while :; do
+		point="$(extract_point "$out" || true)"
+		if [ -n "$point" ]; then
+			kill "$xinput_pid" 2>/dev/null || true
+			wait "$xinput_pid" 2>/dev/null || true
+			printf '%s %s %s %s\n' "$point" "$target_x" "$target_y" "$label"
+			return 0
+		fi
+		if ! kill -0 "$xinput_pid" 2>/dev/null; then
+			wait "$xinput_pid" 2>/dev/null || true
+			point="$(extract_point "$out" || true)"
+			[ -n "$point" ] && printf '%s %s %s %s\n' "$point" "$target_x" "$target_y" "$label"
+			return 0
+		fi
+		sleep 1
+	done
+}
+
+capture_required_tap() {
+	label="$1"
+	target_x="$2"
+	target_y="$3"
+	attempt=1
+	while [ "$attempt" -le "$TAP_RETRIES" ]; do
+		point="$(capture_tap "$label" "$target_x" "$target_y")"
+		if [ -n "$point" ]; then
+			echo "$point"
+			return 0
+		fi
+		echo "No tap captured for $label, retry $attempt/$TAP_RETRIES." >&2
+		attempt=$((attempt + 1))
+	done
+	echo "Calibration failed: no tap captured for $label." >&2
+	return 1
+}
+
+capture_averaged_tap() {
+	label="$1"
+	target_x="$2"
+	target_y="$3"
+	samples="/tmp/x-chip-calibration-$label.samples"
+	rm -f "$samples"
+	sample=1
+	while [ "$sample" -le "$SAMPLES_PER_TARGET" ]; do
+		point="$(capture_required_tap "$label-$sample-of-$SAMPLES_PER_TARGET" "$target_x" "$target_y")" || return 1
+		echo "$point" >>"$samples"
+		sleep 1
+		sample=$((sample + 1))
+	done
+	awk -v tx="$target_x" -v ty="$target_y" -v label="$label" '
+		NF >= 2 { sx += $1; sy += $2; n++ }
+		END {
+			if (n < 1) exit 1
+			printf "%.2f %.2f %s %s %s\n", sx / n, sy / n, tx, ty, label
+		}
+	' "$samples"
+	awk -v label="$label" 'NF >= 2 { printf "sample %s raw=%s,%s\n", label, $1, $2 }' "$samples" >>"$LOG"
+}
+
+compute_matrix() {
+	awk -v w="$WIDTH" -v h="$HEIGHT" -v r="$RAW_RANGE" '
+		function abs(v) {
+			return v < 0 ? -v : v
+		}
+		function det(a,b,c,d,e,f,g,h,i) {
+			return a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g)
+		}
+		function coeff(b0,b1,b2,   Da,Db,Dc) {
+			Da=det(b0,sxy,sx,b1,syy,sy,b2,sy,n)
+			Db=det(sxx,b0,sx,sxy,b1,sy,sx,b2,n)
+			Dc=det(sxx,sxy,b0,sxy,syy,b1,sx,sy,b2)
+			printf "%.9f %.9f %.9f", Da/D, Db/D, Dc/D
+		}
+		NF >= 4 {
+			x=$1/r
+			y=$2/r
+			tx=$3/w
+			ty=$4/h
+			n++
+			sxx += x*x
+			sxy += x*y
+			sx += x
+			syy += y*y
+			sy += y
+			bx0 += x*tx
+			bx1 += y*tx
+			bx2 += tx
+			by0 += x*ty
+			by1 += y*ty
+			by2 += ty
+		}
+		END {
+			if (n < 3) exit 2
+			D=det(sxx,sxy,sx,sxy,syy,sy,sx,sy,n)
+			if (abs(D) < 0.000000001) exit 2
+			coeff(bx0, bx1, bx2)
+			printf " "
+			coeff(by0, by1, by2)
+			printf " 0 0 1\n"
+		}
+	' "$1"
+}
+
+save_matrix() {
+	matrix="$1"
+	points_file="$2"
+	tmp="/tmp/touchscreen-calibration.matrix.$$"
+	{
+		echo "# PocketCHIP sun4i touchscreen -> 480x272 landscape Xorg."
+		echo "# Generated by x-chip-touch-calibrate."
+		echo "# Format: raw_x raw_y target_x target_y label"
+		awk 'NF >= 5 { printf "# point %s raw=%s,%s target=%s,%s\n", $5, $1, $2, $3, $4 }' "$points_file"
+		echo "$matrix"
+	} >"$tmp"
+	if [ "$(id -u)" = 0 ]; then
+		install -m644 "$tmp" "$MATRIX_FILE"
+	else
+		sudo install -m644 "$tmp" "$MATRIX_FILE"
+	fi
+	rm -f "$tmp"
+}
+
+print_fit_error() {
+	matrix="$1"
+	awk -v m="$matrix" -v w="$WIDTH" -v h="$HEIGHT" -v r="$RAW_RANGE" '
+		BEGIN { split(m, p, " ") }
+		NF >= 4 {
+			x=$1/r
+			y=$2/r
+			px=(p[1]*x + p[2]*y + p[3]) * w
+			py=(p[4]*x + p[5]*y + p[6]) * h
+			dx=px - $3
+			dy=py - $4
+			e=sqrt(dx*dx + dy*dy)
+			sum += e
+			if (e > max) max=e
+			n++
+		}
+		END {
+			if (n > 0) printf "Fit error: mean %.1f px, max %.1f px over %d points\n", sum/n, max, n
+		}
+	' "$points"
+}
+
+need_cmd xinput
+need_cmd xset
+need_cmd dd
+need_cmd pgrep
+need_cmd pkill
+
+wait_for_x_ready || {
+	echo "X is not ready on DISPLAY=$DISPLAY" >&2
+	exit 1
+}
+
+: >"$LOG"
+xinput_pid=
+success=0
+
+cleanup_calibration() {
+	[ -n "${xinput_pid:-}" ] && kill "$xinput_pid" 2>/dev/null || true
+	clear_framebuffer >/dev/null 2>&1 || true
+	if [ "$success" != 1 ]; then
+		DISPLAY="$DISPLAY" x-chip-x-apply-calibration >>"$LOG" 2>&1 || true
+	fi
+	start_desktop_windows
+}
+
+trap cleanup_calibration EXIT
+trap 'exit 130' INT TERM
+
+stop_desktop_windows
+set_identity_matrix
+points=/tmp/x-chip-calibration-points.txt
+rm -f "$points"
+capture_averaged_tap top-left "$MARGIN" "$MARGIN" >>"$points" || exit 1
+capture_averaged_tap top-right "$((WIDTH - MARGIN))" "$MARGIN" >>"$points" || exit 1
+capture_averaged_tap center "$((WIDTH / 2))" "$((HEIGHT / 2))" >>"$points" || exit 1
+capture_averaged_tap bottom-left "$MARGIN" "$((HEIGHT - MARGIN))" >>"$points" || exit 1
+capture_averaged_tap bottom-right "$((WIDTH - MARGIN))" "$((HEIGHT - MARGIN))" >>"$points" || exit 1
+
+if [ "$(wc -l <"$points")" -ne 5 ]; then
+	echo "Calibration failed: expected 5 taps, got:" >&2
+	cat "$points" >&2
+	exit 1
+fi
+
+matrix="$(compute_matrix "$points")"
+save_matrix "$matrix" "$points"
+x-chip-x-apply-calibration >>"$LOG" 2>&1 || true
+success=1
+
+echo "Saved calibration matrix:"
+echo "$matrix"
+print_fit_error "$matrix"
+echo "File: $MATRIX_FILE"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-xorg-session" <<'EOF'
+#!/bin/sh
+set -eu
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export DISPLAY=${DISPLAY:-:0}
+X_CHIP_WM=${X_CHIP_WM:-jwm}
+
+x-chip-x-apply-calibration >/tmp/x-chip-x-calibration.log 2>&1 || true
+xset -dpms s off 2>/dev/null || true
+
+if [ ! -f "$HOME/.jwmrc" ] && [ -f /usr/local/share/x-chip/xorg/jwmrc ]; then
+	cp /usr/local/share/x-chip/xorg/jwmrc "$HOME/.jwmrc"
+fi
+
+case "$X_CHIP_WM" in
+	flwm)
+		exec flwm
+		;;
+	jwm|*)
+		exec jwm
+		;;
+esac
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-xorg-launch-vt" <<'EOF'
+#!/bin/sh
+set -eu
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TC_USER=${TC_USER:-$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)}
+X_CHIP_WM=${X_CHIP_WM:-jwm}
+X_CHIP_VT=${X_CHIP_VT:-2}
+XORG_CONFIG=${XORG_CONFIG:-/usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf}
+EMPTY_CONFIG_DIR=/tmp/x-chip-empty-xorg-conf
+XORG_LOG=/tmp/x-chip-xorg.log
+
+start_ssh_if_needed() {
+	pidof sshd >/dev/null 2>&1 && return 0
+	if [ -x /usr/local/etc/init.d/openssh ]; then
+		/usr/local/etc/init.d/openssh start >/var/log/openssh.log 2>&1 || true
+	elif command -v sshd >/dev/null 2>&1; then
+		sshd >/var/log/openssh.log 2>&1 || true
+	fi
+}
+
+mkdir -p /tmp/.X11-unix /tmp/.ICE-unix "$EMPTY_CONFIG_DIR"
+chmod 1777 /tmp/.X11-unix /tmp/.ICE-unix 2>/dev/null || true
+rm -f /tmp/.X11-unix/X0 /tmp/.X0-lock
+
+for fbblank in /sys/class/graphics/fb*/blank; do
+	[ -w "$fbblank" ] && echo 0 > "$fbblank" 2>/dev/null || true
+done
+for backlight in /sys/class/backlight/*; do
+	[ -e "$backlight" ] || continue
+	[ -w "$backlight/bl_power" ] && echo 0 > "$backlight/bl_power" 2>/dev/null || true
+done
+x-chip-brightness apply >/tmp/x-chip-brightness.log 2>&1 || true
+
+start_ssh_if_needed
+Xorg :0 "vt$X_CHIP_VT" -config "$XORG_CONFIG" -configdir "$EMPTY_CONFIG_DIR" -nolisten tcp >"$XORG_LOG" 2>&1 &
+xpid=$!
+ready=0
+for _ in $(seq 1 30); do
+	if [ -S /tmp/.X11-unix/X0 ]; then
+		ready=1
+		break
+	fi
+	if ! kill -0 "$xpid" 2>/dev/null; then
+		break
+	fi
+	sleep 1
+done
+
+for _ in $(seq 1 45); do
+	DISPLAY=:0 xinput list >/dev/null 2>&1 && break
+	DISPLAY=:0 xset q >/dev/null 2>&1 && break
+	if ! kill -0 "$xpid" 2>/dev/null; then
+		break
+	fi
+	sleep 1
+done
+
+if [ "$ready" != 1 ]; then
+	cat "$XORG_LOG" >&2 || true
+	kill "$xpid" 2>/dev/null || true
+	exit 1
+fi
+
+start_ssh_if_needed
+if id "$TC_USER" >/dev/null 2>&1; then
+	su - "$TC_USER" -c "DISPLAY=:0 X_CHIP_WM=$X_CHIP_WM /usr/local/bin/x-chip-xorg-session" &
+else
+	DISPLAY=:0 X_CHIP_WM="$X_CHIP_WM" /usr/local/bin/x-chip-xorg-session &
+fi
+
+wait "$xpid"
+EOF
+
+    touch_calibration_source=$(resolve_path "${TOUCH_CALIBRATION_SOURCE:-config/pocketchip-touchscreen-calibration.matrix}")
+    touch_calibration_matrix=$(read_touch_calibration_matrix "$touch_calibration_source")
+
+    install_text 0644 "$RFS/usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf" <<EOF
+Section "ServerFlags"
+	Option "AutoAddDevices" "true"
+	Option "AutoBindGPU" "false"
+	Option "BlankTime" "0"
+	Option "StandbyTime" "0"
+	Option "SuspendTime" "0"
+	Option "OffTime" "0"
+EndSection
+
+Section "Device"
+	Identifier "PocketCHIP fbdev"
+	Driver "fbdev"
+	Option "fbdev" "/dev/fb0"
+EndSection
+
+Section "Screen"
+	Identifier "PocketCHIP Screen"
+	Device "PocketCHIP fbdev"
+EndSection
+
+Section "InputClass"
+	Identifier "PocketCHIP touchscreen calibration"
+	MatchProduct "1c25000.rtp"
+	Driver "libinput"
+	Option "CalibrationMatrix" "$touch_calibration_matrix"
+EndSection
+EOF
+    need_root cp "$RFS/usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf" \
+        "$RFS/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf"
+
+    need_root install -m 0644 "$touch_calibration_source" \
+        "$RFS/usr/local/share/x-chip/xorg/touchscreen-calibration.matrix"
+    need_root install -m 0644 config/wallpapers/pocket-core.png \
+        "$RFS/usr/local/share/x-chip/xorg/wallpapers/pocket-core.png"
+
+    need_root install -d "$RFS/usr/local/share/x-chip/xorg/icons"
+    for icon in config/xorg-icons/*.xpm; do
+        [ -f "$icon" ] || continue
+        need_root install -m0644 "$icon" "$RFS/usr/local/share/x-chip/xorg/icons/${icon##*/}"
+    done
+    local icon_theme_base="$RFS/usr/local/share/icons/x-chip"
+    need_root install -d \
+        "$icon_theme_base/16x16/actions" \
+        "$icon_theme_base/16x16/apps" \
+        "$icon_theme_base/16x16/categories" \
+        "$icon_theme_base/16x16/devices" \
+        "$icon_theme_base/16x16/mimetypes" \
+        "$icon_theme_base/16x16/places" \
+        "$icon_theme_base/16x16/status"
+    install_text 0644 "$icon_theme_base/index.theme" <<'EOF'
+[Icon Theme]
+Name=X-CHIP
+Comment=PocketCHIP 16px icon theme
+Inherits=Adwaita,hicolor
+Directories=16x16/actions,16x16/apps,16x16/categories,16x16/devices,16x16/mimetypes,16x16/places,16x16/status
+
+[16x16/actions]
+Size=16
+Context=Actions
+Type=Fixed
+
+[16x16/apps]
+Size=16
+Context=Applications
+Type=Fixed
+
+[16x16/categories]
+Size=16
+Context=Categories
+Type=Fixed
+
+[16x16/devices]
+Size=16
+Context=Devices
+Type=Fixed
+
+[16x16/mimetypes]
+Size=16
+Context=MimeTypes
+Type=Fixed
+
+[16x16/places]
+Size=16
+Context=Places
+Type=Fixed
+
+[16x16/status]
+Size=16
+Context=Status
+Type=Fixed
+EOF
+    while read -r source target; do
+        [ -n "$source" ] || continue
+        need_root install -m0644 "config/xorg-icons/$source.xpm" \
+            "$icon_theme_base/16x16/$target.xpm"
+    done <<'EOF'
+back actions/go-previous
+forward actions/go-next
+up actions/go-up
+home actions/go-home
+refresh actions/view-refresh
+close actions/process-stop
+close actions/window-close
+files actions/document-open
+editor actions/document-save
+files apps/file-manager
+files apps/pcmanfm
+browser apps/dillo
+editor apps/leafpad
+code apps/geany
+terminal apps/utilities-terminal
+apps categories/applications-other
+apps categories/applications-system
+pocket devices/computer
+pocket devices/drive-harddisk
+pocket devices/drive-removable-media
+pocket devices/media-flash
+files places/folder
+files places/inode-directory
+home places/user-home
+home places/folder-home
+pocket places/computer
+network places/network-workgroup
+file mimetypes/text-x-generic
+file mimetypes/unknown
+editor mimetypes/text-plain
+code mimetypes/application-x-executable
+terminal mimetypes/application-x-shellscript
+browser mimetypes/text-html
+image mimetypes/image-x-generic
+pocket mimetypes/audio-x-generic
+monitor mimetypes/video-x-generic
+brightness status/display-brightness
+network status/network-wireless
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/jwmrc" <<'EOF'
+<?xml version="1.0"?>
+<JWM>
+  <IconPath>/usr/local/share/x-chip/xorg/icons</IconPath>
+  <DefaultIcon>pocket.xpm</DefaultIcon>
+  <StartupCommand>x-chip-x-apply-calibration</StartupCommand>
+  <RestartCommand>x-chip-x-apply-calibration</RestartCommand>
+
+  <RootMenu onroot="3">
+    <Menu label="Apps" icon="apps.xpm">
+      <Program label="Terminal" icon="terminal.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Terminal</Program>
+      <Program label="Files" icon="files.xpm">pcmanfm</Program>
+      <Program label="Browser" icon="browser.xpm">dillo -g 474x212+0+0</Program>
+      <Program label="Editor" icon="editor.xpm">leafpad</Program>
+      <Program label="Code" icon="code.xpm">geany -s -m -p -t</Program>
+      <Program label="Calculator" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Calculator -e x-chip-calc</Program>
+      <Program label="Images" icon="image.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Images -e x-chip-open-image</Program>
+      <Program label="Music" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Music -e x-chip-music</Program>
+      <Program label="Video" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Video -e x-chip-video</Program>
+      <Separator/>
+      <Program label="Links" icon="browser.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Links -e links</Program>
+      <Program label="Nano" icon="editor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Nano -e nano</Program>
+      <Program label="Midnight Commander" icon="files.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Files -e mc</Program>
+    </Menu>
+    <Menu label="Network" icon="network.xpm">
+      <Program label="WiFi Setup" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu</Program>
+      <Program label="WiFi Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu status</Program>
+      <Program label="WiFi Interfaces" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu interfaces</Program>
+      <Program label="External Scan" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Scan -e x-chip-term-hold x-chip-wifi-menu scan-external</Program>
+    </Menu>
+    <Menu label="Brightness" icon="brightness.xpm">
+      <Program label="Control" icon="brightness.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Brightness -e x-chip-brightness menu</Program>
+      <Program label="Brighter" icon="brightness.xpm">x-chip-brightness up</Program>
+      <Program label="Dim" icon="brightness.xpm">x-chip-brightness down</Program>
+      <Program label="Restore Default" icon="brightness.xpm">x-chip-brightness set 6</Program>
+    </Menu>
+    <Menu label="Pocket" icon="pocket.xpm">
+      <Program label="Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x15+0+0 -title Status -e x-chip-status</Program>
+      <Menu label="Time" icon="pocket.xpm">
+        <Program label="Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time status</Program>
+        <Program label="Sync Internet Time" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time sync</Program>
+        <Program label="Set Date/Time" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Time -e x-chip-time set</Program>
+      </Menu>
+      <Menu label="Desktop Stats" icon="monitor.xpm">
+        <Program label="On" icon="monitor.xpm">x-chip-desktop-stats on</Program>
+        <Program label="Off" icon="close.xpm">x-chip-desktop-stats off</Program>
+        <Program label="Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Stats -e x-chip-term-hold x-chip-desktop-stats status</Program>
+      </Menu>
+      <Program label="Audio Mixer" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Audio -e alsamixer</Program>
+      <Program label="Power" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Power -e x-chip-term-hold x-chip-power-status</Program>
+      <Program label="Keyboard" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Keyboard -e x-chip-term-hold x-chip-keyboard-status</Program>
+      <Program label="Audio Status" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Audio -e x-chip-term-hold x-chip-audio-status</Program>
+      <Program label="Logs" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Logs -e x-chip-logs</Program>
+    </Menu>
+    <Menu label="Touch" icon="touch.xpm">
+      <Program label="Apply Calibration" icon="touch.xpm">x-chip-x-apply-calibration</Program>
+      <Program label="Calibrate" icon="touch.xpm">x-chip-touch-calibrate</Program>
+    </Menu>
+    <Menu label="Window" icon="window.xpm">
+      <Program label="Monitor" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Monitor -e htop</Program>
+      <Program label="Close Apps" icon="close.xpm">x-chip-close-app all</Program>
+      <Restart label="Restart UI" icon="window.xpm"/>
+    </Menu>
+  </RootMenu>
+
+  <Tray x="0" y="-1" width="480" height="32" autohide="off">
+    <TrayButton label="Menu" icon="menu.xpm" popup="Open menu">root:3</TrayButton>
+    <Spacer width="4"/>
+    <TrayButton label="Term" icon="terminal.xpm" popup="Terminal">exec:aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Terminal</TrayButton>
+    <Spacer width="4"/>
+    <TrayButton label="Files" icon="files.xpm" popup="Files">exec:pcmanfm</TrayButton>
+    <Spacer width="6"/>
+    <TaskList maxwidth="260"/>
+    <Clock format="%H:%M"/>
+  </Tray>
+
+  <WindowStyle decorations="motif">
+    <Font>Sans-9</Font>
+    <Width>2</Width>
+    <Height>18</Height>
+    <Corner>0</Corner>
+    <Foreground>#EAF2EF</Foreground>
+    <Background>#354240</Background>
+    <Outline>#0F1716</Outline>
+    <Active>
+      <Foreground>#FFFFFF</Foreground>
+      <Background>#1F7A66</Background>
+    </Active>
+  </WindowStyle>
+
+  <TrayStyle decorations="motif">
+    <Font>Sans-9</Font>
+    <Background>#E7ECEA</Background>
+    <Foreground>#0F1716</Foreground>
+  </TrayStyle>
+
+  <TaskListStyle list="all" group="true">
+    <Font>Sans-9</Font>
+    <Foreground>#0F1716</Foreground>
+    <Background>#D4DDD9</Background>
+    <Active>
+      <Foreground>#FFFFFF</Foreground>
+      <Background>#1F7A66</Background>
+    </Active>
+  </TaskListStyle>
+
+  <MenuStyle decorations="motif">
+    <Font>Sans-9</Font>
+    <Foreground>#0F1716</Foreground>
+    <Background>#F5F7F6</Background>
+    <Active>
+      <Foreground>#FFFFFF</Foreground>
+      <Background>#1F7A66</Background>
+    </Active>
+  </MenuStyle>
+
+  <PopupStyle>
+    <Font>Sans-9</Font>
+    <Foreground>#0F1716</Foreground>
+    <Background>#E7ECEA</Background>
+  </PopupStyle>
+
+  <Desktops width="1" height="1">
+    <Background type="image">/usr/local/share/x-chip/xorg/wallpapers/pocket-core.png</Background>
+  </Desktops>
+
+  <FocusModel>click</FocusModel>
+  <Key mask="A" key="F4">close</Key>
+  <SnapMode distance="8">border</SnapMode>
+  <MoveMode>opaque</MoveMode>
+  <ResizeMode>opaque</ResizeMode>
+</JWM>
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/geany.conf" <<'EOF'
+[geany]
+pref_main_load_session=false
+pref_main_save_winpos=true
+pref_main_confirm_exit=false
+use_atomic_file_saving=false
+editor_font=Monospace 9
+tagbar_font=Sans 9
+msgwin_font=Monospace 9
+show_notebook_tabs=true
+show_tab_cross=true
+tab_pos_editor=2
+show_editor_scrollbars=true
+show_indent_guide=false
+show_white_space=false
+show_line_endings=false
+show_markers_margin=false
+show_linenumber_margin=false
+line_wrapping=true
+use_folding=false
+pref_toolbar_show=false
+pref_toolbar_append_to_menu=false
+sidebar_visible=false
+statusbar_visible=false
+msgwindow_visible=false
+fullscreen=false
+geometry=0;0;474;212;0;
+load_plugins=false
+load_vte=false
+
+[tools]
+terminal_cmd=aterm -e "/bin/sh %c"
+browser_cmd=dillo
+grep_cmd=grep
+
+[files]
+recent_files=
+recent_projects=
+current_page=-1
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/leafpadrc" <<'EOF'
+0.8.19
+474
+212
+Monospace 10
+1
+0
+0
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/pcmanfm.conf" <<'EOF'
+[config]
+bm_open_method=0
+
+[volume]
+mount_on_startup=1
+mount_removable=1
+autorun=1
+
+[ui]
+always_show_tabs=0
+max_tab_chars=18
+win_width=474
+win_height=212
+splitter_pos=105
+media_in_new_tab=0
+desktop_folder_new_win=0
+change_tab_on_drop=1
+close_on_unmount=1
+focus_previous=0
+side_pane_mode=places
+view_mode=list
+show_hidden=0
+sort=name;ascending;
+toolbar=navigation;home;
+show_statusbar=0
+pathbar_mode_buttons=0
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/dillorc" <<'EOF'
+geometry=474x212+0+0
+font_factor=0.85
+font_min_size=6
+font_max_size=14
+small_icons=YES
+panel_size=small
+show_filemenu=YES
+show_back=YES
+show_forw=YES
+show_home=YES
+show_reload=YES
+show_stop=YES
+show_save=NO
+show_bookmarks=NO
+show_tools=NO
+show_search=NO
+show_help=NO
+show_progress_box=NO
+show_msg=NO
+show_url=YES
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/gtkrc-2.0" <<'EOF'
+gtk-font-name = "Sans 9"
+gtk-icon-theme-name = "x-chip"
+gtk-toolbar-style = GTK_TOOLBAR_ICONS
+gtk-icon-sizes = "gtk-small-toolbar=16,16:gtk-large-toolbar=16,16:gtk-button=16,16:gtk-menu=16,16"
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/gtk3-settings.ini" <<'EOF'
+[Settings]
+gtk-font-name = Sans 9
+gtk-icon-theme-name = x-chip
+gtk-theme-name = Adwaita
+gtk-cursor-theme-name = Adwaita
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example" <<'EOF'
+Section "Device"
+	Identifier "PocketCHIP fbturbo"
+	Driver "fbturbo"
+	Option "fbdev" "/dev/fb0"
+	Option "SwapbuffersWait" "true"
+EndSection
+EOF
+}
+
+install_user_command_symlinks() {
+    need_root install -d "$RFS/usr/local/bin"
+    for tool in iw iwconfig wpa_cli; do
+        need_root ln -sfn "../sbin/$tool" "$RFS/usr/local/bin/$tool"
+    done
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-load-rtl8812au" <<'EOF'
+#!/bin/sh
+set -eu
+modprobe 8812au
+echo "RTL8812AU module loaded"
+echo "No WPA/DHCP started on this adapter; internal RTL8723BS remains primary."
+iw dev 2>/dev/null || true
+EOF
+}
+
+install_rtl8812au_hotplug() {
+    need_root install -d "$RFS/etc/udev/rules.d" "$RFS/etc/modprobe.d" "$RFS/usr/local/sbin"
+
+    install_text 0644 "$RFS/etc/modprobe.d/8812au.conf" <<'EOF'
+# Keep the external RTL8812AU adapter responsive for scanning.
+options 8812au rtw_power_mgnt=0 rtw_ips_mode=0
+EOF
+
+    install_text 0755 "$RFS/usr/local/sbin/x-chip-rtl8812au-hotplug" <<'EOF'
+#!/bin/sh
+HOTPLUG_ENABLED="@RTL8812AU_HOTPLUG@"
+LOG=/var/log/rtl8812au-hotplug.log
+
+[ "$HOTPLUG_ENABLED" = 1 ] || exit 0
+
+{
+	echo "=== rtl8812au hotplug $(date 2>/dev/null || true) ==="
+	echo "ACTION=${ACTION:-}"
+	echo "PRODUCT=${PRODUCT:-}"
+	echo "DEVPATH=${DEVPATH:-}"
+
+	if lsmod 2>/dev/null | grep -q '^8812au'; then
+		echo "8812au already loaded"
+	else
+		modprobe 8812au && echo "loaded 8812au" || echo "WARN: failed to load 8812au"
+	fi
+
+	# Intentionally do not start WPA/DHCP here. The internal r8723bs interface
+	# remains the primary SSH/network adapter; this USB adapter is secondary.
+	iw dev 2>/dev/null || true
+} >>"$LOG" 2>&1
+
+exit 0
+EOF
+    need_root sed -i "s/@RTL8812AU_HOTPLUG@/${RTL8812AU_HOTPLUG:-1}/g" "$RFS/usr/local/sbin/x-chip-rtl8812au-hotplug"
+
+    install_text 0644 "$RFS/etc/udev/rules.d/90-x-chip-rtl8812au-hotplug.rules" <<'EOF'
+# Load the optional RTL8812AU USB WiFi module when a Realtek USB adapter appears.
+# Network management is not started here; the adapter remains secondary.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", RUN+="/usr/local/sbin/x-chip-rtl8812au-hotplug"
+EOF
+}
+
+install_extra_firmware() {
+    local src base dir file rel
+    for src in \
+        "$EXTRA_FIRMWARE_SOURCE" \
+        "${EXTRA_FIRMWARE_SOURCE%/lib/firmware}/usr/lib/firmware" \
+        "../flash/rootfs_trixie/usr/lib/firmware"; do
+        case "$src" in
+            /*) base=$src ;;
+            *)  base="$HERE/$src" ;;
+        esac
+        [ -d "$base" ] || continue
+
+        for dir in rtlwifi rtl_bt; do
+            [ -d "$base/$dir" ] || continue
+            while IFS= read -r file; do
+                rel=${file#"$base/"}
+                need_root install -d "$RFS/lib/firmware/$(dirname "$rel")"
+                need_root install -m644 "$file" "$RFS/lib/firmware/$rel"
+            done < <(find "$base/$dir" -maxdepth 1 \( -type f -o -type l \) -name 'rtl8723bs*.bin' | sort)
+        done
+    done
+}
+
+install_preseeded_firmware_fallback() {
+    [ -s "$RFS/lib/firmware/rtlwifi/rtl8723bs_nic.bin" ] && return 0
+    [ -f "$RFS/tce/optional/firmware-rtlwifi.tcz" ] || return 0
+    command -v unsquashfs >/dev/null || {
+        echo "WARN: unsquashfs missing; cannot extract rtl8723bs firmware from firmware-rtlwifi.tcz" >&2
+        return 0
+    }
+
+    local tmp file rel
+    tmp=$(mktemp -d)
+    if ! unsquashfs -quiet -dest "$tmp" "$RFS/tce/optional/firmware-rtlwifi.tcz" >/dev/null; then
+        rm -rf "$tmp"
+        echo "WARN: could not extract firmware-rtlwifi.tcz" >&2
+        return 0
+    fi
+
+    while IFS= read -r file; do
+        rel=${file#"$tmp/"}
+        case "$rel" in
+            usr/local/lib/firmware/*) rel=${rel#usr/local/} ;;
+            lib/firmware/*) ;;
+            *) continue ;;
+        esac
+        need_root install -d "$RFS/$(dirname "$rel")"
+        need_root install -m644 "$file" "$RFS/$rel"
+    done < <(find "$tmp" -type f -path '*/firmware/rtlwifi/rtl8723bs*.bin' | sort)
+
+    rm -rf "$tmp"
+}
+
+install_extra_modules() {
+    local krel module vermagic
+    krel="${KERNEL_VERSION}${KERNEL_LOCALVERSION}"
+    module="$HERE/build/rtl8812au/8812au.ko"
+    [ -f "$module" ] || return 0
+
+    if command -v modinfo >/dev/null; then
+        vermagic=$(modinfo -F vermagic "$module" 2>/dev/null || true)
+        case "$vermagic" in
+            "$krel "*) ;;
+            *)
+                echo "ERROR: $module vermagic '$vermagic' does not match '$krel'" >&2
+                exit 1
+                ;;
+        esac
+    fi
+
+    need_root install -D -m644 "$module" "$RFS/lib/modules/$krel/extra/8812au.ko"
+    need_root depmod -b "$RFS" "$krel"
+}
+
+preseed_tcz_extensions() {
+    [ "${PRESEED_TCZ:-1}" = 1 ] || return 0
+    command -v curl >/dev/null || { echo "need curl to preseed TinyCore extensions" >&2; exit 1; }
+
+    local optional="$RFS/tce/optional"
+    need_root install -d "$optional"
+    declare -A seen=()
+
+    download_optional() {
+        local url=$1 dest=$2 tmp
+        [ -s "$dest" ] && return 0
+        tmp=$(mktemp)
+        if curl -fsSL -o "$tmp" "$url"; then
+            need_root install -m644 "$tmp" "$dest"
+            rm -f "$tmp"
+        else
+            rm -f "$tmp"
+            return 1
+        fi
+    }
+
+    download_required() {
+        local url=$1 dest=$2 tmp
+        [ -s "$dest" ] && return 0
+        tmp=$(mktemp)
+        curl -fSL -o "$tmp" "$url"
+        need_root install -m644 "$tmp" "$dest"
+        rm -f "$tmp"
+    }
+
+    scrub_kernel_placeholder_deps() {
+        local depfile=$1 tmp
+        [ -s "$depfile" ] || return 0
+        if grep -q 'KERNEL' "$depfile"; then
+            tmp=$(mktemp)
+            grep -v 'KERNEL' "$depfile" >"$tmp" || true
+            need_root install -m644 "$tmp" "$depfile"
+            rm -f "$tmp"
+        fi
+    }
+
+    download_tcz() {
+        local pkg=$1 dep
+        pkg=${pkg%%#*}
+        pkg=${pkg//[$'\t\r\n ']/}
+        [ -n "$pkg" ] || return 0
+        [[ "$pkg" == *.tcz ]] || pkg="$pkg.tcz"
+        case "$pkg" in
+            *KERNEL*.tcz)
+                echo ">> skip TinyCore kernel placeholder $pkg"
+                return 0
+                ;;
+        esac
+        [ -n "${seen[$pkg]:-}" ] && return 0
+        seen[$pkg]=1
+
+        echo ">> preseed $pkg"
+        download_required "$TCZ_REPO/$pkg" "$optional/$pkg"
+        download_optional "$TCZ_REPO/$pkg.dep" "$optional/$pkg.dep" || true
+        scrub_kernel_placeholder_deps "$optional/$pkg.dep"
+        download_optional "$TCZ_REPO/$pkg.md5.txt" "$optional/$pkg.md5.txt" || true
+        download_optional "$TCZ_REPO/$pkg.info" "$optional/$pkg.info" || true
+
+        if [ -s "$optional/$pkg.dep" ]; then
+            while IFS= read -r dep; do
+                download_tcz "$dep"
+            done <"$optional/$pkg.dep"
+        fi
+    }
+
+    while IFS= read -r ext; do
+        download_tcz "$ext"
+    done < tce/onboot.lst
+
+    if [ -f tce/media.lst ]; then
+        while IFS= read -r ext; do
+            download_tcz "$ext"
+        done < tce/media.lst
+    fi
+
+    if [ -f tce/xorg.lst ]; then
+        while IFS= read -r ext; do
+            download_tcz "$ext"
+        done < tce/xorg.lst
+    fi
+
+    need_root chown -R 0:0 "$RFS/tce"
+}
+
+materialize_tcz_runtime_extensions() {
+    [ "${PRESEED_TCZ:-1}" = 1 ] || return 0
+    command -v unsquashfs >/dev/null || {
+        echo "ERROR: unsquashfs is required to materialize boot-critical TinyCore extensions" >&2
+        exit 1
+    }
+
+    local optional="$RFS/tce/optional"
+    local manifest_dir="$RFS/usr/local/share/x-chip"
+    local manifest="$manifest_dir/materialized-tcz.lst"
+    local tmp_manifest tmp_extract ext app depfile
+    declare -A materialize_seen=()
+
+    need_root install -d "$manifest_dir" "$RFS/usr/local/tce.installed"
+    tmp_manifest=$(mktemp)
+
+    normalize_tcz_name() {
+        local name=$1
+        name=${name%%#*}
+        name=${name//[$'\t\r\n ']/}
+        [ -n "$name" ] || return 1
+        [[ "$name" == *.tcz ]] || name="$name.tcz"
+        case "$name" in
+            *KERNEL*.tcz) return 1 ;;
+        esac
+        printf '%s\n' "$name"
+    }
+
+    collect_tcz() {
+        local name dep
+        name=$(normalize_tcz_name "$1") || return 0
+        [ -n "${materialize_seen[$name]:-}" ] && return 0
+        materialize_seen[$name]=1
+        [ -f "$optional/$name" ] || {
+            echo "ERROR: cannot materialize missing /tce/optional/$name" >&2
+            exit 1
+        }
+        depfile="$optional/$name.dep"
+        if [ -s "$depfile" ]; then
+            while IFS= read -r dep; do
+                collect_tcz "$dep"
+            done <"$depfile"
+        fi
+        printf '%s\n' "$name" >>"$tmp_manifest"
+    }
+
+    for ext in \
+        openssh.tcz \
+        bash.tcz \
+        dhcpcd.tcz \
+        wpa_supplicant.tcz \
+        iw.tcz \
+        wireless_tools.tcz; do
+        collect_tcz "$ext"
+    done
+
+    if [ -f tce/xorg.lst ]; then
+        while IFS= read -r ext; do
+            collect_tcz "$ext"
+        done < tce/xorg.lst
+    fi
+
+    sort -u "$tmp_manifest" | while IFS= read -r ext; do
+        [ -n "$ext" ] || continue
+        echo ">> materialize $ext"
+        tmp_extract=$(mktemp -d)
+        unsquashfs -quiet -force -dest "$tmp_extract" "$optional/$ext" >/dev/null
+        need_root cp -a "$tmp_extract/." "$RFS/"
+        rm -rf "$tmp_extract"
+        app=${ext%.tcz}
+        [ -e "$RFS/usr/local/tce.installed/$app" ] || need_root touch "$RFS/usr/local/tce.installed/$app"
+    done
+
+    need_root install -m644 "$tmp_manifest" "$manifest"
+    rm -f "$tmp_manifest"
+}
+
+install_firstboot_script() {
+    local tmp
+    tmp=$(mktemp)
+    cat >"$tmp" <<'EOF'
+#!/bin/sh
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+HOSTNAME_VALUE="@HOSTNAME@"
+RTL8812AU_AUTOLOAD_VALUE="@RTL8812AU_AUTOLOAD@"
+RTL8812AU_HOTPLUG_VALUE="@RTL8812AU_HOTPLUG@"
+LCD_BRIGHTNESS_VALUE="@LCD_BRIGHTNESS@"
+LOG=/opt/x-chip-firstboot.log
+exec >>"$LOG" 2>&1
+echo "=== x-chip-firstboot $(date 2>/dev/null || true) ==="
+
+if [ -e /tmp/x-chip-firstboot-ran ]; then
+	echo "x-chip-firstboot already ran this boot"
+	exit 0
+fi
+if ! mkdir /tmp/x-chip-firstboot.lock 2>/dev/null; then
+	echo "x-chip-firstboot already running"
+	exit 0
+fi
+trap 'rmdir /tmp/x-chip-firstboot.lock 2>/dev/null || true' EXIT
+touch /tmp/x-chip-firstboot-ran 2>/dev/null || true
+
+hostname "$HOSTNAME_VALUE" 2>/dev/null || true
+
+silence_kernel_console() {
+	dmesg -n 1 2>/dev/null || true
+	if [ -w /proc/sys/kernel/printk ]; then
+		echo '1 4 1 7' > /proc/sys/kernel/printk 2>/dev/null || true
+	fi
+}
+
+ensure_devpts() {
+	mkdir -p /dev/pts 2>/dev/null || true
+	if ! grep -q ' /dev/pts ' /proc/mounts 2>/dev/null; then
+		mount -t devpts devpts /dev/pts -o mode=620,ptmxmode=666 2>/dev/null || \
+			mount -t devpts devpts /dev/pts 2>/dev/null || true
+	fi
+}
+
+reset_tce_installed_markers() {
+	[ -d /usr/local/tce.installed ] || return 0
+	for marker in /usr/local/tce.installed/*; do
+		[ -e "$marker" ] || continue
+		ext="${marker##*/}.tcz"
+		if [ -r /usr/local/share/x-chip/materialized-tcz.lst ] && grep -qxF "$ext" /usr/local/share/x-chip/materialized-tcz.lst; then
+			continue
+		fi
+		[ -f "/tce/optional/$ext" ] && rm -f "$marker" 2>/dev/null || true
+	done
+}
+
+prepare_tce_runtime() {
+	TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo "@SSH_USER@")"
+	id "$TC_USER" >/dev/null 2>&1 || TC_USER="@SSH_USER@"
+
+	mkdir -p /usr/local/tce.installed /tmp/tcloop /tmp/tce/optional /tce/optional 2>/dev/null || true
+	if [ -d /tce/optional ]; then
+		rm -f /etc/sysconfig/tcedir 2>/dev/null || true
+		ln -s /tce /etc/sysconfig/tcedir 2>/dev/null || true
+	fi
+	chgrp staff /usr/local/tce.installed /tmp/tcloop /tmp/tce /tmp/tce/optional /tce /tce/optional 2>/dev/null || true
+	chmod g+w /usr/local/tce.installed /tmp/tcloop /tmp/tce /tmp/tce/optional /tce /tce/optional 2>/dev/null || true
+	modprobe loop 2>/dev/null || true
+	modprobe squashfs 2>/dev/null || true
+}
+
+load_tcz_onboot() {
+	[ -f /tce/onboot.lst ] || return 0
+	command -v tce-load >/dev/null 2>&1 || return 0
+	TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo "@SSH_USER@")"
+	id "$TC_USER" >/dev/null 2>&1 || TC_USER="@SSH_USER@"
+
+	run_tce_load() {
+		if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+			su "$TC_USER" -c "tce-load -il $1" >/dev/null 2>&1 || true
+		else
+			tce-load -il "$1" >/dev/null 2>&1 || true
+		fi
+	}
+
+	load_tcz_one() {
+		ext="$1"
+		case "$ext" in
+			''|\#*) return 0 ;;
+		esac
+		case "$ext" in
+			*.tcz) app="${ext%.tcz}" ;;
+			*) app="$ext"; ext="$ext.tcz" ;;
+		esac
+		[ -e "/usr/local/tce.installed/$app" ] && return 0
+		if [ -f "/tce/optional/$ext" ]; then
+			run_tce_load "/tce/optional/$ext"
+		else
+			run_tce_load "$ext"
+		fi
+	}
+
+	while IFS= read -r ext; do
+		load_tcz_one "$ext"
+	done < /tce/onboot.lst
+}
+
+load_tcz_boot_core() {
+	[ -f /tce/onboot.lst ] || return 0
+	command -v tce-load >/dev/null 2>&1 || return 0
+	for ext in \
+		openssh.tcz \
+		bash.tcz; do
+		app="${ext%.tcz}"
+		[ -e "/usr/local/tce.installed/$app" ] && continue
+		TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo "@SSH_USER@")"
+		id "$TC_USER" >/dev/null 2>&1 || TC_USER="@SSH_USER@"
+		if [ -f "/tce/optional/$ext" ]; then
+			su "$TC_USER" -c "tce-load -il /tce/optional/$ext" >/dev/null 2>&1 || true
+		else
+			su "$TC_USER" -c "tce-load -il $ext" >/dev/null 2>&1 || true
+		fi
+	done
+}
+
+load_tcz_onboot_background() {
+	(
+		load_tcz_onboot
+		configure_power_management
+		load_audio_modules
+		start_wifi
+		sync_time_background
+		load_rtl8812au_if_present
+		load_extra_wifi_modules
+		start_ssh
+		touch /tmp/x-chip-tce-loaded 2>/dev/null || true
+	) >/var/log/x-chip-tce-background.log 2>&1 &
+}
+
+start_usb_debug_gadget() {
+	modprobe libcomposite 2>/dev/null || true
+	mkdir -p /sys/kernel/config 2>/dev/null || true
+	if ! grep -q ' /sys/kernel/config ' /proc/mounts 2>/dev/null; then
+		mount -t configfs none /sys/kernel/config 2>/dev/null || true
+	fi
+	[ -d /sys/kernel/config/usb_gadget ] || {
+		echo "WARN: usb gadget configfs not available"
+		return 0
+	}
+
+	G=/sys/kernel/config/usb_gadget/xchip_tinycore
+	mkdir -p "$G" "$G/strings/0x409" "$G/configs/c.1/strings/0x409" 2>/dev/null || return 0
+	echo 0x1d6b > "$G/idVendor" 2>/dev/null || true
+	echo 0x0104 > "$G/idProduct" 2>/dev/null || true
+	echo 0x0100 > "$G/bcdDevice" 2>/dev/null || true
+	echo 0x0200 > "$G/bcdUSB" 2>/dev/null || true
+	echo xchip-tinycore > "$G/strings/0x409/serialnumber" 2>/dev/null || true
+	echo NTC > "$G/strings/0x409/manufacturer" 2>/dev/null || true
+	echo "CHIP TinyCore debug" > "$G/strings/0x409/product" 2>/dev/null || true
+	echo "USB debug network" > "$G/configs/c.1/strings/0x409/configuration" 2>/dev/null || true
+	echo 250 > "$G/configs/c.1/MaxPower" 2>/dev/null || true
+
+	FUNC=
+	if mkdir -p "$G/functions/rndis.usb0" 2>/dev/null; then
+		FUNC=rndis.usb0
+	elif mkdir -p "$G/functions/ecm.usb0" 2>/dev/null; then
+		FUNC=ecm.usb0
+	else
+		echo "WARN: no RNDIS/ECM gadget function available"
+		return 0
+	fi
+	echo de:ad:be:ef:54:01 > "$G/functions/$FUNC/dev_addr" 2>/dev/null || true
+	echo de:ad:be:ef:54:02 > "$G/functions/$FUNC/host_addr" 2>/dev/null || true
+	[ -e "$G/configs/c.1/$FUNC" ] || ln -s "$G/functions/$FUNC" "$G/configs/c.1/$FUNC" 2>/dev/null || true
+
+	if [ -e "$G/UDC" ]; then
+		CURRENT_UDC="$(cat "$G/UDC" 2>/dev/null || true)"
+	else
+		CURRENT_UDC=
+	fi
+	if [ -z "$CURRENT_UDC" ]; then
+		UDC="$(ls /sys/class/udc 2>/dev/null | head -n 1)"
+		[ -n "$UDC" ] && echo "$UDC" > "$G/UDC" 2>/dev/null || true
+	fi
+
+	i=0
+	while [ "$i" -lt 10 ]; do
+		[ -e /sys/class/net/usb0 ] && break
+		i=$((i + 1))
+		sleep 1
+	done
+	if [ -e /sys/class/net/usb0 ]; then
+		ifconfig usb0 192.168.82.1 netmask 255.255.255.0 up 2>/dev/null || true
+		echo "USB debug network ready on 192.168.82.1"
+	else
+		echo "WARN: usb0 did not appear"
+	fi
+	}
+
+load_pocketchip_input_modules() {
+	modprobe matrix-keymap 2>/dev/null || true
+	modprobe tca8418_keypad 2>/dev/null || true
+	modprobe sun4i-lradc-keys 2>/dev/null || true
+	modprobe sun4i-ts 2>/dev/null || true
+}
+
+configure_power_management() {
+	modprobe cpufreq-dt 2>/dev/null || true
+	modprobe axp20x_battery 2>/dev/null || true
+	modprobe axp20x_ac_power 2>/dev/null || true
+	modprobe axp20x_usb_power 2>/dev/null || true
+	modprobe axp20x_adc 2>/dev/null || true
+	modprobe iio-hwmon 2>/dev/null || true
+	modprobe sun4i-gpadc-iio 2>/dev/null || true
+	modprobe nvmem_sunxi_sid 2>/dev/null || true
+	modprobe sunxi_wdt 2>/dev/null || true
+
+	for governor in ondemand conservative powersave; do
+		for available in /sys/devices/system/cpu/cpu*/cpufreq/scaling_available_governors; do
+			[ -r "$available" ] || continue
+			if grep -qw "$governor" "$available" 2>/dev/null; then
+				for target in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+					[ -w "$target" ] && echo "$governor" > "$target" 2>/dev/null || true
+				done
+				echo "CPU governor set to $governor where available"
+				return 0
+			fi
+		done
+	done
+}
+
+load_audio_modules() {
+	modprobe snd-simple-card 2>/dev/null || true
+	modprobe snd-soc-simple-card 2>/dev/null || true
+	modprobe sun4i-codec 2>/dev/null || true
+	modprobe snd-soc-sun4i-codec 2>/dev/null || true
+	modprobe sun4i-i2s 2>/dev/null || true
+	modprobe snd-soc-sun4i-i2s 2>/dev/null || true
+	modprobe sun4i-spdif 2>/dev/null || true
+	modprobe snd-soc-sun4i-spdif 2>/dev/null || true
+	modprobe snd-usb-audio 2>/dev/null || true
+	modprobe snd-seq-midi 2>/dev/null || true
+	modprobe snd-virmidi 2>/dev/null || true
+	modprobe snd-pcm-oss 2>/dev/null || true
+	modprobe snd-mixer-oss 2>/dev/null || true
+
+	i=0
+	while [ "$i" -lt 10 ]; do
+		[ -r /proc/asound/cards ] && grep -q '^[[:space:]]*[0-9]' /proc/asound/cards 2>/dev/null && break
+		i=$((i + 1))
+		sleep 1
+	done
+
+	if command -v alsactl >/dev/null 2>&1; then
+		alsactl init >/var/log/alsactl-init.log 2>&1 || true
+	fi
+	if command -v amixer >/dev/null 2>&1; then
+		amixer set Master unmute >/dev/null 2>&1 || true
+		amixer set Master 80% >/dev/null 2>&1 || true
+		amixer set Headphone unmute >/dev/null 2>&1 || true
+		amixer set Headphone 80% >/dev/null 2>&1 || true
+		amixer set Speaker unmute >/dev/null 2>&1 || true
+		amixer set Speaker 80% >/dev/null 2>&1 || true
+		amixer set PCM 80% >/dev/null 2>&1 || true
+		amixer set 'Power Amplifier Mute' off >/dev/null 2>&1 || true
+		amixer set 'Power Amplifier Mixer' off >/dev/null 2>&1 || true
+		amixer set 'Power Amplifier DAC' on >/dev/null 2>&1 || true
+		amixer set 'Power Amplifier' 80% >/dev/null 2>&1 || true
+	fi
+}
+
+start_wifi() {
+	[ -r /etc/wpa_supplicant.conf ] || return 0
+	modprobe r8723bs rtw_power_mgnt=0 rtw_ips_mode=0 2>/dev/null || modprobe r8723bs 2>/dev/null || true
+	rfkill unblock wifi 2>/dev/null || true
+
+	i=0
+	while [ "$i" -lt 30 ]; do
+		WIFI_IFACE="$(find_internal_wifi_iface)"
+		[ -n "$WIFI_IFACE" ] && break
+		i=$((i + 1))
+		sleep 1
+	done
+	[ -n "$WIFI_IFACE" ] || {
+		echo "WARN: internal r8723bs WiFi interface not found"
+		return 0
+	}
+
+	ip link set "$WIFI_IFACE" up 2>/dev/null || ifconfig "$WIFI_IFACE" up 2>/dev/null || true
+	if ! pidof wpa_supplicant >/dev/null 2>&1; then
+		wpa_supplicant -B -i "$WIFI_IFACE" -c /etc/wpa_supplicant.conf >/var/log/wpa_supplicant.log 2>&1 || true
+	fi
+
+	if command -v dhcpcd >/dev/null 2>&1; then
+		dhcpcd -q -t 20 "$WIFI_IFACE" >/var/log/dhcpcd-"$WIFI_IFACE".log 2>&1 || true
+	elif command -v udhcpc >/dev/null 2>&1; then
+		udhcpc -i "$WIFI_IFACE" -x "hostname:$HOSTNAME_VALUE" -b >/var/log/udhcpc-"$WIFI_IFACE".log 2>&1 || true
+	fi
+}
+
+sync_time_background() {
+	[ -x /usr/local/bin/x-chip-time ] || return 0
+	/usr/local/bin/x-chip-time sync-background >/dev/null 2>&1 || true
+}
+
+find_internal_wifi_iface() {
+	for iface_path in /sys/class/net/wlan* /sys/class/net/wlp*; do
+		[ -e "$iface_path" ] || continue
+		iface="${iface_path##*/}"
+		driver=""
+		if [ -r "$iface_path/device/uevent" ]; then
+			driver="$(sed -n 's/^DRIVER=//p' "$iface_path/device/uevent" | head -n 1)"
+		fi
+		if [ -z "$driver" ] && [ -L "$iface_path/device/driver" ]; then
+			driver_path="$(readlink "$iface_path/device/driver" 2>/dev/null || true)"
+			driver="${driver_path##*/}"
+		fi
+		case "$driver" in
+			r8723bs|rtl8723bs)
+				printf '%s\n' "$iface"
+				return 0
+				;;
+		esac
+	done
+	return 1
+}
+
+load_keymap() {
+	[ -r /usr/share/kmap/pocketchip.kmap ] || return 0
+	if command -v loadkmap >/dev/null 2>&1; then
+		loadkmap < /usr/share/kmap/pocketchip.kmap >/var/log/loadkmap.log 2>&1 || true
+	fi
+}
+
+enable_display_console() {
+	for backlight in /sys/class/backlight/*; do
+		[ -e "$backlight" ] || continue
+		[ -w "$backlight/bl_power" ] && echo 0 > "$backlight/bl_power" 2>/dev/null || true
+		if [ -r "$backlight/max_brightness" ] && [ -w "$backlight/brightness" ]; then
+			max_brightness="$(cat "$backlight/max_brightness" 2>/dev/null || echo 10)"
+			[ -n "$max_brightness" ] || max_brightness=10
+			min_brightness=1
+			[ "$max_brightness" -lt "$min_brightness" ] && min_brightness=0
+			brightness="$LCD_BRIGHTNESS_VALUE"
+			case "$brightness" in
+				''|*[!0-9]*) brightness="$max_brightness" ;;
+			esac
+			[ "$brightness" -lt "$min_brightness" ] && brightness="$min_brightness"
+			[ "$brightness" -gt "$max_brightness" ] && brightness="$max_brightness"
+			echo "$brightness" > "$backlight/brightness" 2>/dev/null || true
+			echo "LCD brightness set to $brightness/$max_brightness"
+		fi
+	done
+	for fbblank in /sys/class/graphics/fb*/blank; do
+		[ -w "$fbblank" ] && echo 0 > "$fbblank" 2>/dev/null || true
+	done
+}
+
+load_extra_wifi_modules() {
+	[ "$RTL8812AU_AUTOLOAD_VALUE" = 1 ] || {
+		echo "RTL8812AU boot autoload disabled; hotplug=$RTL8812AU_HOTPLUG_VALUE"
+		return 0
+	}
+	modprobe 8812au >/var/log/modprobe-8812au.log 2>&1 || true
+}
+
+load_rtl8812au_if_present() {
+	[ "$RTL8812AU_HOTPLUG_VALUE" = 1 ] || return 0
+	for dev in /sys/bus/usb/devices/*; do
+		[ -r "$dev/idVendor" ] || continue
+		[ "$(cat "$dev/idVendor" 2>/dev/null)" = "0bda" ] || continue
+		echo "Realtek USB device present; loading RTL8812AU secondary adapter support"
+		/usr/local/sbin/x-chip-rtl8812au-hotplug >/dev/null 2>&1 || modprobe 8812au >/var/log/modprobe-8812au.log 2>&1 || true
+		return 0
+	done
+}
+
+start_desktop() {
+	[ -x /usr/local/bin/x-chip-desktop-start ] || return 0
+	echo "Starting default desktop"
+	/usr/local/bin/x-chip-desktop-start --boot >/var/log/x-chip-desktop.log 2>&1 || \
+		echo "WARN: desktop autostart failed; see /var/log/x-chip-desktop.log"
+}
+
+ensure_ssh_host_keys() {
+	command -v ssh-keygen >/dev/null 2>&1 || return 0
+	mkdir -p /usr/local/etc/ssh
+	[ -f /usr/local/etc/ssh/ssh_host_ed25519_key ] || ssh-keygen -q -t ed25519 -N '' -f /usr/local/etc/ssh/ssh_host_ed25519_key
+	[ -f /usr/local/etc/ssh/ssh_host_rsa_key ] || ssh-keygen -q -t rsa -b 3072 -N '' -f /usr/local/etc/ssh/ssh_host_rsa_key
+}
+
+start_ssh() {
+	ensure_ssh_host_keys
+	pidof sshd >/dev/null 2>&1 && return 0
+	if [ -x /usr/local/etc/init.d/openssh ]; then
+		/usr/local/etc/init.d/openssh start >/var/log/openssh.log 2>&1 || true
+	elif command -v sshd >/dev/null 2>&1; then
+		sshd >/var/log/openssh.log 2>&1 || true
+	fi
+}
+
+silence_kernel_console
+ensure_devpts
+prepare_tce_runtime
+reset_tce_installed_markers
+load_pocketchip_input_modules
+load_keymap
+enable_display_console
+touch /tmp/x-chip-console-ready 2>/dev/null || true
+start_usb_debug_gadget
+load_tcz_boot_core
+start_ssh
+start_desktop
+load_tcz_onboot_background
+EOF
+    sed -i "s/@HOSTNAME@/$CHIP_HOSTNAME/g" "$tmp"
+    sed -i "s/@SSH_USER@/$SSH_USER/g" "$tmp"
+    sed -i "s/@RTL8812AU_AUTOLOAD@/${RTL8812AU_AUTOLOAD:-0}/g" "$tmp"
+    sed -i "s/@RTL8812AU_HOTPLUG@/${RTL8812AU_HOTPLUG:-1}/g" "$tmp"
+    sed -i "s/@LCD_BRIGHTNESS@/${LCD_BRIGHTNESS:-6}/g" "$tmp"
+    need_root install -m755 "$tmp" "$RFS/opt/x-chip-firstboot.sh"
+    rm -f "$tmp"
+
+    need_root touch "$RFS/opt/bootlocal.sh"
+    tmp=$(mktemp)
+    awk '$0 != "/usr/local/etc/init.d/openssh start" { print }' "$RFS/opt/bootlocal.sh" >"$tmp"
+    need_root install -m755 "$tmp" "$RFS/opt/bootlocal.sh"
+    rm -f "$tmp"
+    need_root chown 0:0 "$RFS/opt/bootlocal.sh" 2>/dev/null || true
+    need_root chmod +x "$RFS/opt/bootlocal.sh"
+    need_root sed -i 's/x-chip-tinycore firstboot/x-chip-tinycore-xorg firstboot/g' "$RFS/opt/bootlocal.sh"
+    if ! need_root grep -q '/opt/x-chip-firstboot.sh' "$RFS/opt/bootlocal.sh"; then
+        need_root tee -a "$RFS/opt/bootlocal.sh" >/dev/null <<'EOF'
+# --- x-chip-tinycore-xorg firstboot ---
+/opt/x-chip-firstboot.sh
+EOF
+    fi
+
+    need_root install -d "$RFS/usr/local/etc/ssh"
+    local password_auth
+    password_auth=no
+    [ "$SSH_PASSWORD_AUTH" = 1 ] && password_auth=yes
+    install_text 0644 "$RFS/usr/local/etc/ssh/sshd_config" <<EOF
+Port 22
+Protocol 2
+HostKey /usr/local/etc/ssh/ssh_host_ed25519_key
+HostKey /usr/local/etc/ssh/ssh_host_rsa_key
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+PasswordAuthentication $password_auth
+PermitEmptyPasswords no
+PermitRootLogin prohibit-password
+UseDNS no
+Subsystem sftp internal-sftp
+EOF
+
+    need_root touch "$RFS/opt/.filetool.lst"
+    for entry in \
+        "etc/hostname" \
+        "etc/hosts" \
+        "etc/os-release" \
+        "etc/issue" \
+        "etc/motd" \
+        "etc/modprobe.conf" \
+        "etc/modprobe.d/8812au.conf" \
+        "etc/modprobe.d/r8723bs.conf" \
+        "etc/udev/rules.d/90-x-chip-rtl8812au-hotplug.rules" \
+        "etc/wpa_supplicant.conf" \
+        "home/$SSH_USER/.ssh" \
+        "root/.ssh" \
+        "usr/local/etc/ssh" \
+        "usr/share/kmap/pocketchip.kmap" \
+        "usr/share/kmap/pocketchip.loadkeys" \
+        "usr/local/etc/x-chip" \
+        "usr/local/bin/x-chip-keyboard-status" \
+        "usr/local/bin/x-chip-audio-status" \
+        "usr/local/bin/x-chip-power-status" \
+        "usr/local/bin/x-chip-term-hold" \
+        "usr/local/bin/x-chip-status" \
+        "usr/local/bin/x-chip-calc" \
+        "usr/local/bin/x-chip-time" \
+        "usr/local/bin/x-chip-open-image" \
+        "usr/local/bin/x-chip-music" \
+        "usr/local/bin/x-chip-video" \
+        "usr/local/bin/x-chip-desktop-stats" \
+        "usr/local/bin/x-chip-logs" \
+        "usr/local/bin/x-chip-brightness" \
+        "usr/local/bin/x-chip-wifi-menu" \
+        "usr/local/bin/x-chip-media-on" \
+        "usr/local/bin/x-chip-startx" \
+        "usr/local/bin/x-chip-desktop-start" \
+        "usr/local/bin/x-chip-close-app" \
+        "usr/local/bin/x-chip-x-apply-calibration" \
+        "usr/local/bin/x-chip-touch-calibrate" \
+        "usr/local/bin/x-chip-xorg-launch-vt" \
+        "usr/local/bin/x-chip-xorg-session" \
+        "usr/local/etc/X11/xorg.conf.d" \
+        "etc/X11/xorg.conf.d" \
+        "usr/local/share/x-chip/xorg" \
+        "usr/local/share/x-chip/xorg/touchscreen-calibration.matrix" \
+        "usr/local/sbin/x-chip-rtl8812au-hotplug" \
+        "opt/x-chip-firstboot.sh" \
+        "opt/x-chip-autologin.sh" \
+        "opt/x-chip-tty1-getty.sh" \
+        "opt/bootlocal.sh"; do
+        need_root grep -qxF "$entry" "$RFS/opt/.filetool.lst" 2>/dev/null || \
+            echo "$entry" | need_root tee -a "$RFS/opt/.filetool.lst" >/dev/null
+    done
+}
+
+# 1. u-boot boot script.
+"$MKIMAGE" -A arm -O linux -T script -C none \
+    -d boot/boot.cmd "$RFS/boot/boot.scr"
+
+# 2. tce mirror + onboot extension list (pulled on first online boot).
+need_root install -d "$RFS/tce/optional"
+need_root cp tce/onboot.lst "$RFS/tce/onboot.lst"
+[ -f tce/media.lst ] && need_root cp tce/media.lst "$RFS/tce/media.lst"
+[ -f tce/xorg.lst ] && need_root cp tce/xorg.lst "$RFS/tce/xorg.lst"
+need_root install -d "$RFS/opt"
+echo "$TC_MIRROR" | need_root tee "$RFS/opt/tcemirror" >/dev/null
+
+# 3. Runtime identity, SSH, WiFi and local extensions.
+install_runtime_identity
+install_os_branding
+install_console_config
+patch_tinycore_tce_setup
+patch_tinycore_tc_config
+write_wifi_config
+install_board_runtime_config
+install_keymap
+install_keyboard_debug_tools
+install_hardware_debug_tools
+install_media_tools
+install_xorg_desktop_tools
+install_user_command_symlinks
+install_rtl8812au_hotplug
+install_extra_firmware
+install_extra_modules
+create_static_dev_nodes
+install_early_debug
+preseed_tcz_extensions
+materialize_tcz_runtime_extensions
+install_preseeded_firmware_fallback
+install_firstboot_script
+
+# 4. pack (numeric owners; the flasher rebuilds the UBIFS from this tree).
+normalize_rootfs_metadata
+( cd "$RFS" && tar --numeric-owner -czf "$HERE/$OUT" . )
+need_root chown "$(id -u):$(id -g)" "$HERE/$OUT" 2>/dev/null || true
+for required in ./bin/busybox ./sbin/init ./init ./etc/inittab ./etc/init.d/tc-config; do
+    tar -tzf "$HERE/$OUT" "$required" >/dev/null 2>&1 || {
+        echo "ERROR: packed rootfs is missing $required" >&2
+        exit 1
+    }
+done
+for required in \
+    ./boot/zImage \
+    ./boot/boot.scr \
+    ./boot/sun5i-r8-chip.dtb \
+    ./opt/x-chip-firstboot.sh \
+    ./opt/x-chip-autologin.sh \
+    ./opt/x-chip-tty1-getty.sh \
+    ./usr/local/bin/x-chip-keyboard-status \
+    ./usr/local/bin/x-chip-audio-status \
+    ./usr/local/bin/x-chip-power-status \
+    ./usr/local/bin/x-chip-term-hold \
+    ./usr/local/bin/x-chip-status \
+    ./usr/local/bin/x-chip-calc \
+    ./usr/local/bin/x-chip-time \
+    ./usr/local/bin/x-chip-open-image \
+    ./usr/local/bin/x-chip-music \
+    ./usr/local/bin/x-chip-video \
+    ./usr/local/bin/x-chip-desktop-stats \
+    ./usr/local/bin/x-chip-logs \
+    ./usr/local/bin/x-chip-brightness \
+    ./usr/local/bin/x-chip-wifi-menu \
+    ./usr/local/bin/x-chip-media-on \
+    ./usr/local/bin/x-chip-startx \
+    ./usr/local/bin/x-chip-desktop-start \
+    ./usr/local/bin/x-chip-x-apply-calibration \
+    ./usr/local/bin/x-chip-touch-calibrate \
+    ./usr/local/bin/x-chip-xorg-launch-vt \
+    ./usr/local/bin/x-chip-xorg-session \
+    ./usr/local/sbin/x-chip-rtl8812au-hotplug \
+    ./etc/modprobe.d/8812au.conf \
+    ./etc/udev/rules.d/90-x-chip-rtl8812au-hotplug.rules \
+    ./usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf \
+    ./etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf \
+    ./usr/local/share/x-chip/xorg/touchscreen-calibration.matrix \
+    ./usr/local/share/x-chip/xorg/jwmrc \
+    ./usr/local/share/x-chip/xorg/wallpapers/pocket-core.png \
+    ./usr/local/share/x-chip/xorg/icons/menu.xpm \
+    ./usr/local/share/icons/x-chip/index.theme \
+    ./usr/local/share/icons/x-chip/16x16/places/folder.xpm \
+    ./usr/local/etc/x-chip/display.conf \
+    ./usr/local/etc/x-chip/desktop.conf \
+    ./usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example \
+    ./usr/local/etc/ssh/sshd_config \
+    ./home/$SSH_USER/.ssh/authorized_keys \
+    ./home/$SSH_USER/Pictures \
+    ./home/$SSH_USER/Videos \
+    ./home/$SSH_USER/Music \
+    ./home/$SSH_USER/Downloads \
+    ./usr/share/kmap/pocketchip.kmap \
+    ./lib/firmware/nextthingco/chip/early/x-chip-pocketchip.dtbo \
+    ./lib/firmware/rtlwifi/rtl8723bs_nic.bin \
+    ./tce/onboot.lst \
+    ./tce/media.lst \
+    ./tce/xorg.lst; do
+    tar -tzf "$HERE/$OUT" "$required" >/dev/null 2>&1 || {
+        echo "ERROR: packed rootfs is missing $required" >&2
+        exit 1
+    }
+done
+if [ "${REQUIRE_WIFI_CONFIG:-1}" = 1 ]; then
+    tar -tzf "$HERE/$OUT" ./etc/wpa_supplicant.conf >/dev/null 2>&1 || {
+        echo "ERROR: packed rootfs is missing WiFi config" >&2
+        exit 1
+    }
+fi
+if [ "${RTL8812AU_BUILD:-1}" = 1 ]; then
+    tar -tzf "$HERE/$OUT" "./lib/modules/${KERNEL_VERSION}${KERNEL_LOCALVERSION}/extra/8812au.ko" >/dev/null 2>&1 || {
+        echo "ERROR: packed rootfs is missing RTL8812AU module" >&2
+        exit 1
+    }
+fi
+
+"$HERE/scripts/07-verify-rootfs.sh" "$HERE/$OUT"
+
+echo ">> wrote $HERE/$OUT"
+echo ">> flash: ../x-chip-tools/flash-live.sh $OUT"

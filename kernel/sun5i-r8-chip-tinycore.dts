@@ -1,0 +1,65 @@
+#include "sun5i-r8-chip.dts"
+
+/*
+ * Mainline's CHIP DTB is enough for generic peripherals, but not for NAND boot:
+ * the Linux kernel needs these fixed partitions so ubi.mtd=4 resolves to the
+ * SLC-emulated rootfs volume written by x-chip-tools.
+ */
+&nfc {
+	pinctrl-names = "default";
+	pinctrl-0 = <&nand_pins &nand_cs0_pin &nand_rb0_pin>;
+	status = "okay";
+
+	nand@0 {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		reg = <0>;
+		allwinner,rb = <0>;
+		nand-ecc-mode = "hw";
+		nand-ecc-maximize;
+		nand-on-flash-bbt;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <2>;
+			#size-cells = <2>;
+
+			partition@0 {
+				label = "SPL";
+				reg = <0x0 0x00000000 0x0 0x00400000>;
+			};
+
+			partition@400000 {
+				label = "SPL.backup";
+				reg = <0x0 0x00400000 0x0 0x00400000>;
+			};
+
+			partition@800000 {
+				label = "U-Boot";
+				reg = <0x0 0x00800000 0x0 0x00400000>;
+			};
+
+			partition@c00000 {
+				label = "env";
+				reg = <0x0 0x00c00000 0x0 0x00400000>;
+			};
+
+			partition@1000000 {
+				label = "rootfs";
+				reg = <0x0 0x01000000 0x1 0xff000000>;
+				slc-mode;
+			};
+		};
+	};
+};
+
+&mmc0 {
+	broken-cd;
+
+	r8723bs: r8723bs@1 {
+		reg = <1>;
+		interrupt-parent = <&pio>;
+		interrupts = <1 3 IRQ_TYPE_EDGE_FALLING>; /* PB3 / EINT17 */
+		interrupt-names = "host-wake";
+	};
+};

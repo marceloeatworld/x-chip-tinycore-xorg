@@ -1,0 +1,50 @@
+# Build trees, downloaded upstream sources, compiled modules, and unpacked rootfs.
+build/
+.cache/
+.tmp/
+tmp/
+
+# Local/personal provisioning. Never publish these.
+secrets.env
+secrets.env.*
+!secrets.env.example
+authorized_keys
+id_*
+known_hosts
+*.key
+*.pem
+*.p12
+*.crt
+*.csr
+
+# Local agent/workspace metadata, not project source.
+.agents/
+.codex/
+
+# Generated flash/release images. Upload public-safe images as release assets,
+# not as normal git-tracked source files.
+*-rootfs.tar.gz
+*.rootfs.tar.gz
+*.img
+*.img.gz
+*.uimage
+*.tar
+*.tar.gz
+*.zip
+*.sha256
+dist/
+release/
+*.swu
+
+# Local tool outputs.
+result
+result-man
+*.log
+*.tmp
+*.bak
+
+# Editor/OS noise.
+.DS_Store
+*~
+*.swp
+*.swo
