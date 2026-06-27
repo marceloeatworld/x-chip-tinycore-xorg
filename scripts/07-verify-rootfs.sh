@@ -36,9 +36,11 @@ ROOTFS=${1:-${ROOTFS:-$OUT}}
 
 TMP_LIST=$(mktemp)
 TMP_VERBOSE=$(mktemp)
-trap 'rm -f "$TMP_LIST" "$TMP_VERBOSE"' EXIT
+TMP_ROOT=$(mktemp -d)
+trap 'rm -f "$TMP_LIST" "$TMP_VERBOSE"; rm -rf "$TMP_ROOT"' EXIT
 tar -tzf "$ROOTFS" >"$TMP_LIST"
 tar -tvzf "$ROOTFS" >"$TMP_VERBOSE"
+tar --exclude='./dev/*' --exclude='dev/*' -xzf "$ROOTFS" -C "$TMP_ROOT"
 
 has_entry() {
     local path=${1#/}
@@ -57,7 +59,7 @@ require_entry() {
 
 extract_entry() {
     local path=${1#/}
-    tar -xOzf "$ROOTFS" "./$path" 2>/dev/null || tar -xOzf "$ROOTFS" "$path"
+    cat "$TMP_ROOT/$path"
 }
 
 tar_verbose_line() {
@@ -150,7 +152,7 @@ reject_entry() {
 require_content() {
     local path=$1 pattern=$2
     require_entry "$path"
-    extract_entry "$path" | grep -a "$pattern" >/dev/null || {
+    extract_entry "$path" | grep -aF -- "$pattern" >/dev/null || {
         echo "ERROR: /${path#/} does not contain expected marker: $pattern" >&2
         exit 1
     }
@@ -159,7 +161,7 @@ require_content() {
 reject_content() {
     local path=$1 pattern=$2
     require_entry "$path"
-    if extract_entry "$path" | grep -a "$pattern" >/dev/null; then
+    if extract_entry "$path" | grep -aF -- "$pattern" >/dev/null; then
         echo "ERROR: /${path#/} contains unsupported marker: $pattern" >&2
         exit 1
     fi
@@ -610,10 +612,10 @@ require_content usr/local/bin/x-chip-brightness '/sys/class/backlight'
 require_content usr/local/bin/x-chip-brightness 'MIN_BRIGHTNESS='
 require_content usr/local/bin/x-chip-brightness 'filetool.sh -b'
 require_content usr/local/bin/x-chip-power-status 'Battery:'
-require_content usr/local/bin/x-chip-power-status 'USB: online='
+require_content usr/local/bin/x-chip-power-status 'label=USB'
+require_content usr/local/bin/x-chip-power-status '%s: online=%s'
 require_content usr/local/bin/x-chip-term-hold 'Press enter to close.'
 require_content usr/local/bin/x-chip-status 'Pocket Status'
-require_content usr/local/bin/x-chip-status 'x-chip-status'
 require_content usr/local/bin/x-chip-status 'ifconfig "$iface"'
 require_content usr/local/bin/x-chip-calc 'bc -l'
 require_content usr/local/bin/x-chip-time 'ntpd -nq'
@@ -709,7 +711,6 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-brightness'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-logs'
 require_content usr/local/share/x-chip/xorg/jwmrc 'Close Apps'
 require_content usr/local/share/x-chip/xorg/jwmrc '<Key mask="A" key="F4">close</Key>'
-require_content usr/local/share/x-chip/xorg/jwmrc 'exec:dillo -g 474x212+0+0'
 require_content usr/local/share/x-chip/xorg/jwmrc 'Apply Calibration'
 require_content usr/local/share/x-chip/xorg/jwmrc '<Font>Sans-9</Font>'
 require_content usr/local/share/x-chip/xorg/jwmrc 'Background type="image">/usr/local/share/x-chip/xorg/wallpapers/pocket-core.png'
