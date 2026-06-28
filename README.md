@@ -120,6 +120,14 @@ The default wallpaper is `/usr/local/share/x-chip/xorg/wallpapers/pocket-core.pn
 a lightweight `480x272` PocketCHIP-specific background built to keep the tray
 and small windows readable.
 
+Live PocketCHIP screenshots:
+
+![PocketCHIP TinyCore desktop](docs/assets/pocket-readme-screen.png)
+
+![Dillo on PocketCHIP TinyCore](docs/assets/pocket-readme-dillo.png)
+
+![Game menu on PocketCHIP TinyCore](docs/assets/pocket-readme-game.png)
+
 Lightweight system controls are built in without NetworkManager or a desktop
 settings daemon:
 
