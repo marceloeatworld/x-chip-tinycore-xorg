@@ -1588,6 +1588,10 @@ DISPLAY=${DISPLAY:-:0}
 HOME_DIR=${HOME:-/home/chip}
 MANIFEST=${X_CHIP_TIC80_CARTS_MANIFEST:-/usr/local/share/x-chip/tic80-carts.tsv}
 CART_DIR=${X_CHIP_TIC80_CART_DIR:-$HOME_DIR/TIC-80/carts}
+TIC80_CONFIG_ROOT=${X_CHIP_TIC80_CONFIG_ROOT:-$HOME_DIR/.local/share/com.nesbox.tic/TIC-80/.local}
+TIC80_SCALE=${X_CHIP_TIC80_SCALE:-2}
+TIC80_FULLSCREEN=${X_CHIP_TIC80_FULLSCREEN:-1}
+TIC80_POCKET_KEYS=${X_CHIP_TIC80_POCKET_KEYS:-1}
 TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
 
 run_tce_load() {
@@ -1641,6 +1645,17 @@ cart_path_for() {
 	printf '%s/%s\n' "$CART_DIR" "$file"
 }
 
+tls_ready() {
+	for bundle in \
+		/usr/local/etc/pki/certs/ca-bundle.crt \
+		/usr/local/etc/ssl/certs/ca-bundle.crt \
+		/usr/local/etc/ssl/certs/ca-certificates.crt \
+		/etc/ssl/certs/ca-certificates.crt; do
+		[ -s "$bundle" ] && return 0
+	done
+	return 1
+}
+
 download_url() {
 	url=$1
 	dest=$2
@@ -1650,7 +1665,12 @@ download_url() {
 		load_app
 	fi
 	if command -v curl >/dev/null 2>&1; then
-		curl -fL -o "$tmp" "$url"
+		if ! tls_ready; then
+			echo "TLS certificate bundle is missing; HTTPS downloads cannot be verified." >&2
+			echo "Rebuild/reflash with the current image or run: sudo /usr/local/tce.installed/ca-certificates" >&2
+			return 1
+		fi
+		curl --retry 2 --connect-timeout 20 -fL -o "$tmp" "$url"
 	elif command -v wget >/dev/null 2>&1; then
 		wget -O "$tmp" "$url"
 	else
@@ -1693,16 +1713,68 @@ install_all() {
 	done
 }
 
+tic80_version_hash() {
+	tic80 --version 2>&1 | sed -n 's/.*(\([0-9a-f][0-9a-f]*\)).*/\1/p' | sed -n '1p'
+}
+
+write_pocketchip_tic80_options() {
+	opt=$1
+	mkdir -p "${opt%/*}"
+	{
+		printf '\000\000\001\001\017\000\000\000\072\073\074\075\034\035\001\023'
+		dd if=/dev/zero bs=1 count=36 2>/dev/null
+		printf '\001\000\000\000'
+	} >"$opt"
+}
+
+patch_tic80_options_file() {
+	opt=$1
+	[ -s "$opt" ] || return 0
+	size=$(wc -c <"$opt" 2>/dev/null | tr -d ' ')
+	[ "${size:-0}" -ge 16 ] || return 0
+	current=$(dd if="$opt" bs=1 skip=12 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+	case "$current" in
+		1c1d) return 0 ;;
+		1a18) ;;
+		*) return 0 ;;
+	esac
+	printf '\034\035' | dd of="$opt" bs=1 seek=12 conv=notrunc >/dev/null 2>&1 || true
+}
+
+ensure_pocketchip_tic80_keys() {
+	[ "$TIC80_POCKET_KEYS" = 1 ] || return 0
+	hash=$(tic80_version_hash || true)
+	if [ -n "$hash" ]; then
+		opt="$TIC80_CONFIG_ROOT/$hash/options.dat"
+		[ -e "$opt" ] || write_pocketchip_tic80_options "$opt"
+	fi
+	[ -d "$TIC80_CONFIG_ROOT" ] || return 0
+	find "$TIC80_CONFIG_ROOT" -name options.dat -type f 2>/dev/null | while IFS= read -r opt; do
+		patch_tic80_options_file "$opt"
+	done
+}
+
+run_tic80() {
+	load_app
+	ensure_pocketchip_tic80_keys
+	SDL_RENDER_DRIVER=${SDL_RENDER_DRIVER:-software}
+	export DISPLAY HOME SDL_RENDER_DRIVER
+	set -- --skip --soft --scale="$TIC80_SCALE" "$@"
+	if [ "$TIC80_FULLSCREEN" = 1 ]; then
+		set -- --fullscreen "$@"
+	fi
+	exec tic80 "$@"
+}
+
 list_games() {
 	awk -F '	' 'NF >= 4 && $1 !~ /^#/ { printf "%2d) %s\n", ++count, $2 }' "$MANIFEST"
 }
 
 play_game() {
 	slug=$1
-	load_app
 	install_game "$slug"
 	cart=$(cart_path_for "$slug")
-	DISPLAY="$DISPLAY" exec tic80 "$cart"
+	run_tic80 --cmd=run "$cart"
 }
 
 pause() {
@@ -1726,7 +1798,7 @@ menu() {
 		case "$choice" in
 			q|Q) exit 0 ;;
 			a|A) install_all; pause ;;
-			t|T) load_app; DISPLAY="$DISPLAY" tic80; pause ;;
+			t|T) run_tic80 ;;
 			''|*[!0-9]*) echo "Invalid selection"; pause ;;
 			*)
 				slug=$(slug_for_index "$choice") || {
@@ -1741,7 +1813,7 @@ menu() {
 }
 
 case "${1:-menu}" in
-	run) load_app; DISPLAY="$DISPLAY" exec tic80 ;;
+	run) run_tic80 ;;
 	menu) menu ;;
 	list) list_games ;;
 	install) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-tic80 install GAME" >&2; exit 2; }; install_game "$1" ;;
@@ -1797,6 +1869,8 @@ set -eu
 DISPLAY=${DISPLAY:-:0}
 HOME_DIR=${HOME:-/home/chip}
 ROM_DIR=${X_CHIP_MGBA_ROM_DIR:-$HOME_DIR/Games/GameBoy}
+MGBA_CONFIG=${X_CHIP_MGBA_CONFIG:-$HOME_DIR/.config/mgba/config.ini}
+MGBA_POCKET_KEYS=${X_CHIP_MGBA_POCKET_KEYS:-1}
 TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
 
 run_tce_load() {
@@ -1842,6 +1916,41 @@ load_app() {
 	}
 }
 
+ensure_mgba_pocket_keys() {
+	[ "$MGBA_POCKET_KEYS" = 1 ] || return 0
+	mkdir -p "${MGBA_CONFIG%/*}"
+	tmp="$MGBA_CONFIG.tmp.$$"
+	if [ -f "$MGBA_CONFIG" ]; then
+		awk '
+			BEGIN { in_section = 0 }
+			/^\[gba\.input\.KEY\]$/ { in_section = 1; print; next }
+			/^\[/ { in_section = 0 }
+			in_section && /^keyA=/ { next }
+			in_section && /^keyB=/ { next }
+			{ print }
+		' "$MGBA_CONFIG" >"$tmp"
+	else
+		: >"$tmp"
+	fi
+	if ! grep -qxF '[gba.input.KEY]' "$tmp"; then
+		printf '\n[gba.input.KEY]\n' >>"$tmp"
+	fi
+	awk '
+		BEGIN { in_section = 0 }
+		{
+			print
+			if ($0 == "[gba.input.KEY]") {
+				in_section = 1
+				print "keyA=49"
+				print "keyB=50"
+				next
+			}
+			if (in_section && $0 ~ /^\[/) in_section = 0
+		}
+	' "$tmp" >"$MGBA_CONFIG"
+	rm -f "$tmp"
+}
+
 list_roms() {
 	for dir in "$ROM_DIR" "$HOME_DIR/Downloads" "$HOME_DIR"; do
 		[ -d "$dir" ] || continue
@@ -1870,6 +1979,7 @@ play_file() {
 		return 1
 	}
 	load_app
+	ensure_mgba_pocket_keys
 	run_mgba "$file"
 }
 
@@ -2201,7 +2311,7 @@ conky.config = {
 	total_run_times = 0,
 	double_buffer = true,
 	use_xft = true,
-	font = 'Sans:size=8',
+	font = 'Luxi Sans:size=8',
 	own_window = false,
 	alignment = 'top_left',
 	gap_x = 6,
@@ -2299,6 +2409,7 @@ case "${1:-all}" in
 	xorg)
 		show_file /tmp/x-chip-startx.log 100
 		show_file /tmp/x-chip-xorg.log 140
+		show_file /tmp/Xorg.0.log 160
 		show_file /tmp/x-chip-x-calibration.log 80
 		;;
 	wifi)
@@ -2316,6 +2427,7 @@ case "${1:-all}" in
 		show_file /var/log/x-chip-desktop.log 120
 		show_file /tmp/x-chip-startx.log 80
 		show_file /tmp/x-chip-xorg.log 100
+		show_file /tmp/Xorg.0.log 100
 		show_file /var/log/wpa_supplicant.log 80
 		show_file /tmp/x-chip-brightness.log 40
 		echo
@@ -3192,6 +3304,19 @@ load_xorg_stack() {
 	done < "$XORG_LIST"
 }
 
+prune_conflicting_xorg_defaults() {
+	for conf in \
+		/usr/local/share/X11/xorg.conf.d/20-noglamor.conf \
+		/etc/X11/xorg.conf.d/20-noglamor.conf; do
+		[ -e "$conf" ] || continue
+		if [ "$(id -u)" = 0 ]; then
+			rm -f "$conf" 2>/dev/null || true
+		elif command -v sudo >/dev/null 2>&1; then
+			sudo rm -f "$conf" 2>/dev/null || true
+		fi
+	done
+}
+
 user_home() {
 	awk -F: -v user="$TC_USER" '$1 == user { print $6; found = 1 } END { exit found ? 0 : 1 }' /etc/passwd 2>/dev/null || \
 		printf '/home/%s\n' "$TC_USER"
@@ -3204,22 +3329,16 @@ install_user_desktop_config() {
 	mkdir -p "$home/.config/geany" "$home/.config/leafpad" \
 		"$home/.config/pcmanfm/default" "$home/.config/gtk-3.0" "$home/.config/mc" \
 		"$home/.local/share/applications" "$home/.dillo"
-	[ -f "$home/.config/geany/geany.conf" ] || \
-		cp /usr/local/share/x-chip/xorg/geany.conf "$home/.config/geany/geany.conf"
-	[ -f "$home/.config/leafpad/leafpadrc" ] || \
-		cp /usr/local/share/x-chip/xorg/leafpadrc "$home/.config/leafpad/leafpadrc"
-	[ -f "$home/.config/pcmanfm/default/pcmanfm.conf" ] || \
-		cp /usr/local/share/x-chip/xorg/pcmanfm.conf "$home/.config/pcmanfm/default/pcmanfm.conf"
-	[ -f "$home/.config/mc/ini" ] || \
-		cp /usr/local/share/x-chip/xorg/mc.ini "$home/.config/mc/ini"
+	cp /usr/local/share/x-chip/xorg/geany.conf "$home/.config/geany/geany.conf"
+	cp /usr/local/share/x-chip/xorg/leafpadrc "$home/.config/leafpad/leafpadrc"
+	cp /usr/local/share/x-chip/xorg/pcmanfm.conf "$home/.config/pcmanfm/default/pcmanfm.conf"
+	cp /usr/local/share/x-chip/xorg/mc.ini "$home/.config/mc/ini"
 	cp /usr/local/share/applications/mimeapps.list "$home/.config/mimeapps.list"
 	cp /usr/local/share/applications/mimeapps.list "$home/.local/share/applications/mimeapps.list"
 	cp /usr/local/share/applications/x-chip-*.desktop "$home/.local/share/applications/" 2>/dev/null || true
-	[ -f "$home/.dillo/dillorc" ] || \
-		cp /usr/local/share/x-chip/xorg/dillorc "$home/.dillo/dillorc"
+	cp /usr/local/share/x-chip/xorg/dillorc "$home/.dillo/dillorc"
 	cp /usr/local/share/x-chip/xorg/gtkrc-2.0 "$home/.gtkrc-2.0"
-	[ -f "$home/.Xdefaults" ] || \
-		cp /usr/local/share/x-chip/xorg/Xdefaults "$home/.Xdefaults"
+	cp /usr/local/share/x-chip/xorg/Xdefaults "$home/.Xdefaults"
 	cp /usr/local/share/x-chip/xorg/gtk3-settings.ini "$home/.config/gtk-3.0/settings.ini"
 	if id "$TC_USER" >/dev/null 2>&1; then
 		chown -R "$TC_USER":"$TC_USER" "$home/.jwmrc" "$home/.config" "$home/.local" "$home/.dillo" "$home/.gtkrc-2.0" "$home/.Xdefaults" 2>/dev/null || true
@@ -3275,6 +3394,7 @@ start_x_session() {
 }
 
 load_xorg_stack
+prune_conflicting_xorg_defaults
 refresh_graphical_caches
 install_user_desktop_config
 start_x_session
@@ -3411,6 +3531,31 @@ case "${1:-all}" in
 		;;
 	*) echo "Usage: x-chip-close-app [all|files|web|code|edit|image|video|music]" >&2; exit 2 ;;
 esac
+
+DISPLAY=${DISPLAY:-:0} jwm -restart 2>/dev/null || true
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-close-game" <<'EOF'
+#!/bin/sh
+set -eu
+
+close_one() {
+	name=$1
+	pkill "$name" 2>/dev/null || true
+}
+
+force_one() {
+	name=$1
+	pkill -9 "$name" 2>/dev/null || true
+}
+
+for app in tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker; do
+	close_one "$app"
+done
+sleep 1
+for app in tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker; do
+	force_one "$app"
+done
 
 DISPLAY=${DISPLAY:-:0} jwm -restart 2>/dev/null || true
 EOF
@@ -3878,12 +4023,13 @@ TC_USER=${TC_USER:-$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)}
 X_CHIP_WM=${X_CHIP_WM:-jwm}
 X_CHIP_VT=${X_CHIP_VT:-2}
 XORG_CONFIG=${XORG_CONFIG:-/usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf}
-EMPTY_CONFIG_DIR=/tmp/x-chip-empty-xorg-conf
 XORG_LOG=/tmp/x-chip-xorg.log
+XORG_SERVER_LOG=/tmp/Xorg.0.log
 
-mkdir -p /tmp/.X11-unix /tmp/.ICE-unix "$EMPTY_CONFIG_DIR"
+mkdir -p /tmp/.X11-unix /tmp/.ICE-unix
 chmod 1777 /tmp/.X11-unix /tmp/.ICE-unix 2>/dev/null || true
 rm -f /tmp/.X11-unix/X0 /tmp/.X0-lock
+rm -f "$XORG_SERVER_LOG"
 
 for fbblank in /sys/class/graphics/fb*/blank; do
 	[ -w "$fbblank" ] && echo 0 > "$fbblank" 2>/dev/null || true
@@ -3894,7 +4040,7 @@ for backlight in /sys/class/backlight/*; do
 done
 x-chip-brightness apply >/tmp/x-chip-brightness.log 2>&1 || true
 
-Xorg :0 "vt$X_CHIP_VT" -config "$XORG_CONFIG" -configdir "$EMPTY_CONFIG_DIR" -nolisten tcp >"$XORG_LOG" 2>&1 &
+Xorg :0 "vt$X_CHIP_VT" -config "$XORG_CONFIG" -logfile "$XORG_SERVER_LOG" -nolisten tcp >"$XORG_LOG" 2>&1 &
 xpid=$!
 ready=0
 for _ in $(seq 1 30); do
@@ -4175,22 +4321,22 @@ EOF
       <Program label="Game Boy Launcher" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GameBoy -e x-chip-mgba</Program>
       <Program label="Game Boy Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title mGBA -e x-chip-term-hold x-chip-mgba status</Program>
       <Program label="PICO-8" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title PICO-8 -e x-chip-pico8 menu</Program>
-      <Program label="TIC-80" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 run</Program>
+      <Program label="TIC-80" icon="pocket.xpm">x-chip-tic80 run</Program>
       <Program label="TIC-80 Manager" icon="apps.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 menu</Program>
       <Program label="Install All TIC-80 Games" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 install-all</Program>
       <Menu label="TIC-80 Games" icon="pocket.xpm">
-        <Program label="8 Bit Panda" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play 8-bit-panda</Program>
-        <Program label="Stele" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play stele</Program>
-        <Program label="Balmung" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play balmung</Program>
-        <Program label="Supernova" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play supernova</Program>
-        <Program label="Turns of War" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play turns-of-war</Program>
-        <Program label="Cauliflower Power" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play cauliflower-power</Program>
-        <Program label="Minetic" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play minetic</Program>
-        <Program label="Powder Game" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play powder-game</Program>
-        <Program label="Secret Agents" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play secret-agents</Program>
-        <Program label="Komet" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play komet</Program>
-        <Program label="The Sky House" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play the-sky-house</Program>
-        <Program label="TIC-Sweeper" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play tic-sweeper</Program>
+        <Program label="8 Bit Panda" icon="pocket.xpm">x-chip-tic80 play 8-bit-panda</Program>
+        <Program label="Stele" icon="pocket.xpm">x-chip-tic80 play stele</Program>
+        <Program label="Balmung" icon="pocket.xpm">x-chip-tic80 play balmung</Program>
+        <Program label="Supernova" icon="pocket.xpm">x-chip-tic80 play supernova</Program>
+        <Program label="Turns of War" icon="pocket.xpm">x-chip-tic80 play turns-of-war</Program>
+        <Program label="Cauliflower Power" icon="pocket.xpm">x-chip-tic80 play cauliflower-power</Program>
+        <Program label="Minetic" icon="pocket.xpm">x-chip-tic80 play minetic</Program>
+        <Program label="Powder Game" icon="pocket.xpm">x-chip-tic80 play powder-game</Program>
+        <Program label="Secret Agents" icon="pocket.xpm">x-chip-tic80 play secret-agents</Program>
+        <Program label="Komet" icon="pocket.xpm">x-chip-tic80 play komet</Program>
+        <Program label="The Sky House" icon="pocket.xpm">x-chip-tic80 play the-sky-house</Program>
+        <Program label="TIC-Sweeper" icon="pocket.xpm">x-chip-tic80 play tic-sweeper</Program>
       </Menu>
       <Program label="GoatTracker" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GoatTracker -e x-chip-term-hold x-chip-goattracker</Program>
     </Menu>
@@ -4230,6 +4376,7 @@ EOF
     </Menu>
     <Menu label="Window" icon="window.xpm">
       <Program label="Monitor" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Monitor -e htop</Program>
+      <Program label="Close Games" icon="close.xpm">x-chip-close-game</Program>
       <Program label="Close Apps" icon="close.xpm">x-chip-close-app all</Program>
       <Restart label="Restart UI" icon="window.xpm"/>
     </Menu>
@@ -4249,7 +4396,7 @@ EOF
   </Tray>
 
   <WindowStyle decorations="motif">
-    <Font>Sans-9</Font>
+    <Font>Luxi Sans-9</Font>
     <Width>2</Width>
     <Height>18</Height>
     <Corner>0</Corner>
@@ -4263,13 +4410,13 @@ EOF
   </WindowStyle>
 
   <TrayStyle decorations="motif">
-    <Font>Sans-9</Font>
+    <Font>Luxi Sans-9</Font>
     <Background>#0F1716</Background>
     <Foreground>#EAF2EF</Foreground>
   </TrayStyle>
 
   <TaskListStyle list="all" group="true">
-    <Font>Sans-9</Font>
+    <Font>Luxi Sans-9</Font>
     <Foreground>#EAF2EF</Foreground>
     <Background>#223331</Background>
     <Active>
@@ -4279,7 +4426,7 @@ EOF
   </TaskListStyle>
 
   <MenuStyle decorations="motif">
-    <Font>Sans-9</Font>
+    <Font>Luxi Sans-9</Font>
     <Foreground>#EAF2EF</Foreground>
     <Background>#0F1716</Background>
     <Active>
@@ -4289,7 +4436,7 @@ EOF
   </MenuStyle>
 
   <PopupStyle>
-    <Font>Sans-9</Font>
+    <Font>Luxi Sans-9</Font>
     <Foreground>#EAF2EF</Foreground>
     <Background>#223331</Background>
   </PopupStyle>
@@ -4300,6 +4447,9 @@ EOF
 
   <FocusModel>click</FocusModel>
   <Key mask="A" key="F4">close</Key>
+  <Key key="Home">exec:x-chip-close-game</Key>
+  <Key key="XF86HomePage">exec:x-chip-close-game</Key>
+  <Key key="XF86PowerOff">exec:x-chip-close-game</Key>
   <SnapMode distance="8">border</SnapMode>
   <MoveMode>opaque</MoveMode>
   <ResizeMode>opaque</ResizeMode>
@@ -4312,9 +4462,9 @@ pref_main_load_session=false
 pref_main_save_winpos=true
 pref_main_confirm_exit=false
 use_atomic_file_saving=false
-editor_font=Monospace 9
-tagbar_font=Sans 9
-msgwin_font=Monospace 9
+editor_font=Luxi Mono 9
+tagbar_font=Luxi Sans 9
+msgwin_font=Luxi Mono 9
 show_notebook_tabs=true
 show_tab_cross=true
 tab_pos_editor=2
@@ -4351,7 +4501,7 @@ EOF
 0.8.19
 474
 212
-Monospace 10
+Luxi Mono 9
 1
 0
 0
@@ -4410,7 +4560,7 @@ show_url=YES
 EOF
 
     install_text 0644 "$RFS/usr/local/share/x-chip/xorg/gtkrc-2.0" <<'EOF'
-gtk-font-name = "Sans 9"
+gtk-font-name = "Luxi Sans 9"
 gtk-icon-theme-name = "x-chip"
 gtk-toolbar-style = GTK_TOOLBAR_ICONS
 gtk-icon-sizes = "gtk-small-toolbar=16,16:gtk-large-toolbar=16,16:gtk-button=16,16:gtk-menu=16,16"
@@ -4435,10 +4585,16 @@ EOF
 
     install_text 0644 "$RFS/usr/local/share/x-chip/xorg/Xdefaults" <<'EOF'
 Aterm*transparent: false
+Aterm*inheritPixmap: false
 Aterm*shading: 0
+Aterm*fading: 0
 Aterm*background: #0F1716
 Aterm*foreground: #EAF2EF
 Aterm*cursorColor: #1F7A66
+Aterm*font: 8x13
+Aterm*boldFont: 8x13
+Aterm*scrollBar: true
+Aterm*saveLines: 1000
 EOF
 
     install_text 0644 "$RFS/usr/local/share/applications/x-chip-image.desktop" <<'EOF'
@@ -4570,7 +4726,7 @@ EOF
 
     install_text 0644 "$RFS/usr/local/share/x-chip/xorg/gtk3-settings.ini" <<'EOF'
 [Settings]
-gtk-font-name = Sans 9
+gtk-font-name = Luxi Sans 9
 gtk-icon-theme-name = x-chip
 gtk-theme-name = Adwaita
 gtk-application-prefer-dark-theme = false
@@ -4926,6 +5082,64 @@ materialize_tcz_runtime_extensions() {
     rm -f "$tmp_manifest"
 }
 
+install_ca_certificates_bundle() {
+    local cert_dir="$RFS/usr/local/share/ca-certificates"
+    local conf_src="$cert_dir/files/ca-certificates.conf"
+    local conf_dst="$RFS/usr/local/etc/ca-certificates.conf"
+    local certs_dir="$RFS/usr/local/etc/ssl/certs"
+    local tmp_bundle tmp_list rel cert
+
+    [ -d "$cert_dir" ] || return 0
+
+    need_root install -d \
+        "$RFS/usr/local/etc" \
+        "$RFS/usr/local/etc/ssl" \
+        "$certs_dir" \
+        "$RFS/usr/local/etc/pki/certs" \
+        "$RFS/etc/ssl"
+
+    if [ ! -s "$conf_dst" ] && [ -s "$conf_src" ]; then
+        need_root install -m644 "$conf_src" "$conf_dst"
+    fi
+
+    tmp_bundle=$(mktemp)
+    tmp_list=$(mktemp)
+    if [ -s "$conf_dst" ]; then
+        sed -e '/^$/d' -e '/^#/d' -e '/^!/d' "$conf_dst" >"$tmp_list"
+    fi
+    if [ ! -s "$tmp_list" ]; then
+        find "$cert_dir" -type f -name '*.crt' | sed "s#^$cert_dir/##" | sort >"$tmp_list"
+    fi
+
+    while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        cert="$cert_dir/$rel"
+        [ -f "$cert" ] || continue
+        sed -e '$a\' "$cert" >>"$tmp_bundle"
+    done <"$tmp_list"
+
+    if [ ! -s "$tmp_bundle" ]; then
+        rm -f "$tmp_bundle" "$tmp_list"
+        echo "ERROR: ca-certificates.tcz was materialized but no CA bundle could be built" >&2
+        exit 1
+    fi
+
+    need_root install -m644 "$tmp_bundle" "$certs_dir/ca-certificates.crt"
+    need_root ln -sfn ca-certificates.crt "$certs_dir/ca-bundle.crt"
+    need_root ln -sfn certs/ca-certificates.crt "$RFS/usr/local/etc/ssl/cacert.pem"
+    need_root ln -sfn certs/ca-certificates.crt "$RFS/usr/local/etc/ssl/ca-bundle.crt"
+    need_root ln -sfn ../../ssl/certs/ca-certificates.crt "$RFS/usr/local/etc/pki/certs/ca-bundle.crt"
+    need_root rm -rf "$RFS/etc/ssl/certs"
+    need_root ln -sfn /usr/local/etc/ssl/certs "$RFS/etc/ssl/certs"
+    rm -f "$tmp_bundle" "$tmp_list"
+}
+
+prune_conflicting_xorg_defaults_from_rootfs() {
+    need_root rm -f \
+        "$RFS/usr/local/share/X11/xorg.conf.d/20-noglamor.conf" \
+        "$RFS/etc/X11/xorg.conf.d/20-noglamor.conf"
+}
+
 compile_host_mime_database() {
     local mime_dir="$RFS/usr/local/share/mime"
     [ -d "$mime_dir/packages" ] || return 0
@@ -4952,6 +5166,27 @@ LOG=/opt/x-chip-boot.log
 exec >>"$LOG" 2>&1
 echo "=== x-chip boot runtime $(date 2>/dev/null || true) ==="
 
+boot_seconds() {
+	awk '{ printf "%d", $1 }' /proc/uptime 2>/dev/null || echo 0
+}
+
+boot_stamp() {
+	echo "[$(boot_seconds)s] $*"
+}
+
+boot_status() {
+	msg="$*"
+	boot_stamp "$msg"
+	if [ -w /dev/tty1 ]; then
+		{
+			printf '\033[2J\033[H'
+			printf 'X-CHIP TinyCore\n\n'
+			printf '%s\n\n' "$msg"
+			printf 'Please wait...\n'
+		} >/dev/tty1 2>/dev/null || true
+	fi
+}
+
 if ! grep -q ' /dev/shm ' /proc/mounts 2>/dev/null; then
 	mkdir -p /dev/shm 2>/dev/null || true
 	mount -t tmpfs tmpfs /dev/shm 2>/dev/null || true
@@ -4976,6 +5211,7 @@ trap 'rmdir "$RUN_LOCK" 2>/dev/null || true' EXIT
 touch "$RUN_MARKER" 2>/dev/null || true
 
 hostname "$HOSTNAME_VALUE" 2>/dev/null || true
+boot_status "Preparing system services"
 
 silence_kernel_console() {
 	dmesg -n 1 2>/dev/null || true
@@ -5400,15 +5636,25 @@ ensure_devpts
 ensure_runtime_dirs
 prepare_tce_runtime
 reset_tce_installed_markers
+boot_stamp "Runtime directories and TinyCore state ready"
 load_pocketchip_input_modules
 load_keymap
 enable_display_console
+boot_status "Console, keyboard, and display ready"
 touch "$CONSOLE_READY" 2>/dev/null || true
 start_usb_debug_gadget &
+boot_stamp "USB debug network start requested"
+boot_status "Loading SSH boot core"
 load_tcz_boot_core
+boot_stamp "SSH boot core loaded"
 start_ssh
+boot_stamp "SSH service requested"
 load_tcz_onboot_background
+boot_stamp "Background extension load requested"
+boot_status "Starting desktop on VT2"
 start_desktop
+boot_status "Desktop ready on VT2"
+boot_stamp "Boot runtime complete"
 EOF
     sed -i "s/@HOSTNAME@/$CHIP_HOSTNAME/g" "$tmp"
     sed -i "s/@SSH_USER@/$SSH_USER/g" "$tmp"
@@ -5507,6 +5753,7 @@ EOF
         "usr/local/bin/x-chip-desktop-start" \
         "usr/local/bin/x-chip-gtk-cache" \
         "usr/local/bin/x-chip-close-app" \
+        "usr/local/bin/x-chip-close-game" \
         "usr/local/bin/x-chip-x-apply-calibration" \
         "usr/local/bin/x-chip-touch-calibrate" \
         "usr/local/bin/x-chip-xorg-launch-vt" \
@@ -5561,6 +5808,8 @@ create_static_dev_nodes
 install_early_debug
 preseed_tcz_extensions
 materialize_tcz_runtime_extensions
+install_ca_certificates_bundle
+prune_conflicting_xorg_defaults_from_rootfs
 install_preseeded_firmware_fallback
 install_boot_runtime_script
 compile_host_mime_database
@@ -5611,6 +5860,7 @@ for required in \
     ./usr/local/bin/x-chip-desktop-start \
     ./usr/local/bin/x-chip-gtk-cache \
     ./usr/local/bin/x-chip-close-app \
+    ./usr/local/bin/x-chip-close-game \
     ./usr/local/bin/x-chip-x-apply-calibration \
     ./usr/local/bin/x-chip-touch-calibrate \
     ./usr/local/bin/x-chip-xorg-launch-vt \

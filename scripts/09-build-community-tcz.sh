@@ -204,6 +204,11 @@ build_tic80() {
     mkdir -p "$work"
     git clone --recursive --branch "$TIC80_TAG" --depth 1 https://github.com/nesbox/TIC-80.git "$src"
 
+    # PocketCHIP has hardware arrow keys and numbered keys beside the screen.
+    # Make game prompts intuitive: 1 is TIC-80 A, 2 is TIC-80 B.
+    perl -0pi -e 's/SDL_SCANCODE_Z,\n\s*SDL_SCANCODE_X,/SDL_SCANCODE_1,\n                    SDL_SCANCODE_2,/g' \
+        "$src/src/system/sdl/main.c"
+
     local toolchain="$work/armhf-toolchain.cmake"
     write_tic80_toolchain "$toolchain"
 
@@ -322,6 +327,9 @@ build_mgba() {
     # surface that opens but never visibly updates. Force a software surface.
     perl -0pi -e 's/SDL_DOUBLEBUF \| SDL_HWSURFACE/SDL_SWSURFACE/g' \
         "$src/src/platform/sdl/sw-sdl1.c"
+    # Match the PocketCHIP game controls used by TIC-80: arrows, 1=A, 2=B.
+    perl -0pi -e 's/SDLK_x, GBA_KEY_A/SDLK_1, GBA_KEY_A/g; s/SDLK_z, GBA_KEY_B/SDLK_2, GBA_KEY_B/g' \
+        "$src/src/platform/sdl/sdl-events.c"
 
     local toolchain="$work/armhf-toolchain.cmake"
     write_armhf_toolchain "$toolchain"

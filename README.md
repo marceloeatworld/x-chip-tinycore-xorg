@@ -109,8 +109,9 @@ bottom bar with `Menu`, `Term`, `Files`, task list, and clock, plus organized
 menus for everything else. The graphical defaults are Dillo, PCManFM, Leafpad,
 and Geany; terminal fallbacks like `links`, `nano`, and `mc` remain available
 under `Apps`. It does not auto-open a terminal on startup. Default app profiles
-hide nonessential panes and use a uniform `Sans 9` UI font so Geany, Dillo,
-PCManFM, and Leafpad fit the PocketCHIP's `480x272` LCD.
+hide nonessential panes and use `Luxi Sans 9` for UI text plus `Luxi Mono 9`
+for text editors so Geany, Dillo, PCManFM, and Leafpad fit the PocketCHIP's
+`480x272` LCD.
 JWM uses a tiny local XPM icon set from
 `/usr/local/share/x-chip/xorg/icons` via `IconPath`, so menus and tray buttons
 get consistent icons without loading a full desktop icon theme. GTK apps use the
@@ -167,6 +168,7 @@ Xorg/session logs go to:
 ```sh
 /tmp/x-chip-startx.log
 /tmp/x-chip-xorg.log
+/tmp/Xorg.0.log
 /tmp/x-chip-x-calibration.log
 /var/log/x-chip-desktop.log
 ```
@@ -265,6 +267,9 @@ Game Boy, or Doom.
 The TIC-80 menu includes a curated top-rated game list. The image does not
 redistribute `.tic` cartridges; `x-chip-tic80` downloads each cart from
 `tic80.com` on first launch and stores it under `~/TIC-80/carts`.
+TIC-80 and mGBA use the same PocketCHIP game controls: arrow keys for movement,
+`1` for button A, and `2` for button B. For mGBA, `Enter` is Start and
+`Backspace` is Select. The PocketCHIP Home/Power key closes running games.
 `doom.tcz` includes Freedoom Phase 1, which is a free replacement IWAD; commercial
 Doom WAD files are not bundled. The Doom launcher defaults to silent audio on
 PocketCHIP because SDL audio can block startup on this hardware; set

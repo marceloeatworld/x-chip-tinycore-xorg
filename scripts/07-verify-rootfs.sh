@@ -309,6 +309,7 @@ for required in \
     usr/local/bin/x-chip-desktop-start \
     usr/local/bin/x-chip-gtk-cache \
     usr/local/bin/x-chip-close-app \
+    usr/local/bin/x-chip-close-game \
     usr/local/bin/x-chip-x-apply-calibration \
     usr/local/bin/x-chip-touch-calibrate \
     usr/local/bin/x-chip-xorg-launch-vt \
@@ -464,6 +465,7 @@ for root_owned in \
     usr/local/bin/x-chip-desktop-start \
     usr/local/bin/x-chip-gtk-cache \
     usr/local/bin/x-chip-close-app \
+    usr/local/bin/x-chip-close-game \
     usr/local/bin/x-chip-x-apply-calibration \
     usr/local/bin/x-chip-touch-calibrate \
     usr/local/bin/x-chip-xorg-launch-vt \
@@ -696,6 +698,10 @@ require_content opt/x-chip-boot.sh "Power Amplifier Mute' on"
 require_content opt/x-chip-boot.sh 'LCD_BRIGHTNESS_VALUE='
 require_content opt/x-chip-boot.sh 'LCD brightness set to'
 require_content opt/x-chip-boot.sh 'silence_kernel_console'
+require_content opt/x-chip-boot.sh 'boot_status'
+require_content opt/x-chip-boot.sh 'X-CHIP TinyCore'
+require_content opt/x-chip-boot.sh 'Starting desktop on VT2'
+require_content opt/x-chip-boot.sh 'Boot runtime complete'
 require_content opt/x-chip-boot.sh 'touch "$RUN_MARKER"'
 require_content opt/x-chip-boot.sh 'touch "$CONSOLE_READY"'
 require_content opt/x-chip-boot.sh 'touch "$TCE_READY"'
@@ -751,7 +757,10 @@ require_content usr/local/bin/x-chip-startx 'x-chip-gtk-cache quick'
 require_content usr/local/bin/x-chip-startx 'x-chip-wm-recover.log'
 require_content usr/local/bin/x-chip-startx 'pidof Xorg'
 require_content usr/local/bin/x-chip-startx 'rm -f /tmp/.X11-unix/X0 /tmp/.X0-lock'
-require_order usr/local/bin/x-chip-startx '^load_xorg_stack$' '^refresh_graphical_caches$'
+require_content usr/local/bin/x-chip-startx 'prune_conflicting_xorg_defaults'
+require_content usr/local/bin/x-chip-startx '/usr/local/share/X11/xorg.conf.d/20-noglamor.conf'
+require_order usr/local/bin/x-chip-startx '^load_xorg_stack$' '^prune_conflicting_xorg_defaults$'
+require_order usr/local/bin/x-chip-startx '^prune_conflicting_xorg_defaults$' '^refresh_graphical_caches$'
 require_order usr/local/bin/x-chip-startx '^refresh_graphical_caches$' '^install_user_desktop_config$'
 require_content usr/local/bin/x-chip-desktop-start 'X_CHIP_DESKTOP_AUTOSTART'
 require_content usr/local/bin/x-chip-desktop-start 'x-chip-startx'
@@ -771,6 +780,9 @@ require_content usr/local/bin/x-chip-xorg-session 'exec jwm'
 require_content usr/local/bin/x-chip-xorg-launch-vt 'Xorg :0'
 require_content usr/local/bin/x-chip-xorg-launch-vt 'vt$X_CHIP_VT'
 require_content usr/local/bin/x-chip-xorg-launch-vt 'x-chip-brightness apply'
+require_content usr/local/bin/x-chip-xorg-launch-vt 'XORG_SERVER_LOG=/tmp/Xorg.0.log'
+require_content usr/local/bin/x-chip-xorg-launch-vt '-logfile "$XORG_SERVER_LOG"'
+reject_content usr/local/bin/x-chip-xorg-launch-vt '-configdir "$EMPTY_CONFIG_DIR"'
 reject_content usr/local/bin/x-chip-xorg-launch-vt 'start_ssh_if_needed'
 require_content usr/local/bin/x-chip-brightness '/sys/class/backlight'
 require_content usr/local/bin/x-chip-brightness 'MIN_BRIGHTNESS='
@@ -822,15 +834,47 @@ require_nonempty home/$SSH_USER/Music/dreamscape-sample.mp3
 require_content usr/local/bin/x-chip-tic80 'run_tce_load /tce/optional/tic80.tcz'
 require_content usr/local/bin/x-chip-tic80 'su "$TC_USER" -c "tce-load -il $target"'
 require_content usr/local/bin/x-chip-tic80 'tic80-carts.tsv'
+require_content usr/local/bin/x-chip-tic80 'tls_ready'
+require_content usr/local/bin/x-chip-tic80 '/usr/local/etc/pki/certs/ca-bundle.crt'
+require_content usr/local/bin/x-chip-tic80 'curl --retry 2 --connect-timeout 20'
+require_content usr/local/bin/x-chip-tic80 'TIC80_POCKET_KEYS'
+require_content usr/local/bin/x-chip-tic80 'ensure_pocketchip_tic80_keys'
+require_content usr/local/bin/x-chip-tic80 'SDL_RENDER_DRIVER=${SDL_RENDER_DRIVER:-software}'
+require_content usr/local/bin/x-chip-tic80 '--fullscreen'
+require_content usr/local/bin/x-chip-tic80 '--soft'
+require_content usr/local/bin/x-chip-tic80 '--scale="$TIC80_SCALE"'
+require_content usr/local/bin/x-chip-tic80 '--cmd=run'
+require_content usr/local/bin/x-chip-tic80 'printf '\''\034\035'\'''
 require_content usr/local/bin/x-chip-goattracker 'run_tce_load /tce/optional/goattracker.tcz'
 require_content usr/local/bin/x-chip-goattracker 'su "$TC_USER" -c "tce-load -il $target"'
 require_content usr/local/bin/x-chip-mgba 'run_tce_load /tce/optional/mgba.tcz'
 require_content usr/local/bin/x-chip-mgba 'su "$TC_USER" -c "tce-load -il $target"'
 require_content usr/local/bin/x-chip-mgba 'Games/GameBoy'
 require_content usr/local/bin/x-chip-mgba 'mgba-sdl1'
+require_content usr/local/bin/x-chip-mgba 'MGBA_POCKET_KEYS'
+require_content usr/local/bin/x-chip-mgba 'ensure_mgba_pocket_keys'
+require_content usr/local/bin/x-chip-mgba '[gba.input.KEY]'
+require_content usr/local/bin/x-chip-mgba 'keyA=49'
+require_content usr/local/bin/x-chip-mgba 'keyB=50'
 require_content usr/local/bin/x-chip-mgba 'SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-x11}'
 require_content usr/local/bin/x-chip-mgba 'SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}'
 require_content usr/local/bin/x-chip-mgba 'exec "$cmd" -1 "$@"'
+grep -F -- 'SDL_SCANCODE_1' scripts/09-build-community-tcz.sh >/dev/null || {
+    echo "ERROR: scripts/09-build-community-tcz.sh no longer maps TIC-80 A to 1" >&2
+    exit 1
+}
+grep -F -- 'SDL_SCANCODE_2' scripts/09-build-community-tcz.sh >/dev/null || {
+    echo "ERROR: scripts/09-build-community-tcz.sh no longer maps TIC-80 B to 2" >&2
+    exit 1
+}
+grep -F -- 'SDLK_1, GBA_KEY_A' scripts/09-build-community-tcz.sh >/dev/null || {
+    echo "ERROR: scripts/09-build-community-tcz.sh no longer maps mGBA A to 1" >&2
+    exit 1
+}
+grep -F -- 'SDLK_2, GBA_KEY_B' scripts/09-build-community-tcz.sh >/dev/null || {
+    echo "ERROR: scripts/09-build-community-tcz.sh no longer maps mGBA B to 2" >&2
+    exit 1
+}
 require_content usr/local/bin/x-chip-pico8 'PICO-8 is not bundled'
 require_content usr/local/bin/x-chip-pico8 '-windowed 1 -width 480 -height 272'
 require_content usr/local/bin/x-chip-games 'x-chip-mgba menu'
@@ -856,6 +900,7 @@ require_content usr/local/bin/x-chip-wifi-menu 'scan-external'
 require_content usr/local/bin/x-chip-wifi-menu 'sudo iw dev "$iface" scan'
 require_content usr/local/bin/x-chip-logs '/opt/x-chip-boot.log'
 require_content usr/local/bin/x-chip-logs '/var/log/x-chip-desktop.log'
+require_content usr/local/bin/x-chip-logs '/tmp/Xorg.0.log'
 require_content usr/local/etc/x-chip/display.conf 'LCD_BRIGHTNESS='
 require_content usr/local/etc/x-chip/desktop.conf 'X_CHIP_DESKTOP_AUTOSTART=1'
 require_content usr/local/etc/x-chip/wifi.conf 'X_CHIP_WIFI_CLIENT_DRIVER=rtl8723bs'
@@ -870,6 +915,13 @@ require_content usr/local/share/x-chip/materialized-tcz.lst 'pcmanfm.tcz'
 require_content usr/local/share/x-chip/materialized-tcz.lst 'bc.tcz'
 require_content usr/local/share/x-chip/materialized-tcz.lst 'gpicview.tcz'
 require_content usr/local/share/x-chip/materialized-tcz.lst 'conky.tcz'
+require_entry usr/local/etc/ca-certificates.conf
+require_content usr/local/etc/ssl/certs/ca-certificates.crt 'BEGIN CERTIFICATE'
+require_type usr/local/etc/ssl/certs/ca-bundle.crt l
+require_type usr/local/etc/ssl/cacert.pem l
+require_type usr/local/etc/ssl/ca-bundle.crt l
+require_type usr/local/etc/pki/certs/ca-bundle.crt l
+require_type etc/ssl/certs l
 require_content opt/.filetool.lst 'usr/local/share/x-chip/xorg/touchscreen-calibration.matrix'
 require_content opt/.filetool.lst 'usr/local/etc/x-chip'
 require_content opt/.filetool.lst 'opt/x-chip-boot.sh'
@@ -898,6 +950,7 @@ require_content opt/.filetool.lst 'usr/local/bin/x-chip-wifi-menu'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-desktop-start'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-gtk-cache'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-close-app'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-close-game'
 require_content opt/.filetool.lst 'usr/local/share/x-chip/tic80-carts.tsv'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'Driver "fbdev"'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'AutoBindGPU'
@@ -905,6 +958,9 @@ require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'MatchPro
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'CalibrationMatrix'
 require_content etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'Driver "fbdev"'
 require_content etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'CalibrationMatrix'
+reject_entry usr/local/share/X11/xorg.conf.d/20-noglamor.conf
+reject_entry etc/X11/xorg.conf.d/20-noglamor.conf
+require_entry usr/local/share/X11/xorg.conf.d/40-libinput.conf
 require_content usr/local/share/x-chip/xorg/touchscreen-calibration.matrix '-1.069801149 0.001502438'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf '-1.069801149 0.001502438'
 require_content usr/local/share/x-chip/xorg/jwmrc '<Tray'
@@ -932,8 +988,10 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-mgba'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="PICO-8" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-pico8 menu'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-games'
-require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 run'
-require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 play 8-bit-panda'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-tic80 run'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-tic80 play 8-bit-panda'
+reject_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 run'
+reject_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 play'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-goattracker'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Apps" icon="apps.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Network" icon="network.xpm"'
@@ -1013,29 +1071,41 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-desktop-stats off'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-brightness'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-logs'
 require_content usr/local/share/x-chip/xorg/jwmrc 'Close Apps'
+require_content usr/local/share/x-chip/xorg/jwmrc 'Close Games'
 require_content usr/local/share/x-chip/xorg/jwmrc '<Key mask="A" key="F4">close</Key>'
+require_content usr/local/share/x-chip/xorg/jwmrc '<Key key="Home">exec:x-chip-close-game</Key>'
+require_content usr/local/share/x-chip/xorg/jwmrc '<Key key="XF86HomePage">exec:x-chip-close-game</Key>'
+require_content usr/local/share/x-chip/xorg/jwmrc '<Key key="XF86PowerOff">exec:x-chip-close-game</Key>'
 require_content usr/local/share/x-chip/xorg/jwmrc 'Apply Calibration'
-require_content usr/local/share/x-chip/xorg/jwmrc '<Font>Sans-9</Font>'
+require_content usr/local/share/x-chip/xorg/jwmrc '<Font>Luxi Sans-9</Font>'
 require_content usr/local/share/x-chip/xorg/jwmrc 'Background type="image">/usr/local/share/x-chip/xorg/wallpapers/pocket-core.png'
 require_content usr/local/share/x-chip/xorg/geany.conf 'pref_toolbar_show=false'
 require_content usr/local/share/x-chip/xorg/geany.conf 'msgwindow_visible=false'
 require_content usr/local/share/x-chip/xorg/geany.conf 'geometry=0;0;474;212;0;'
-require_content usr/local/share/x-chip/xorg/leafpadrc 'Monospace 10'
+require_content usr/local/share/x-chip/xorg/geany.conf 'editor_font=Luxi Mono 9'
+require_content usr/local/share/x-chip/xorg/geany.conf 'tagbar_font=Luxi Sans 9'
+require_content usr/local/share/x-chip/xorg/geany.conf 'msgwin_font=Luxi Mono 9'
+require_content usr/local/share/x-chip/xorg/leafpadrc 'Luxi Mono 9'
 require_content usr/local/share/x-chip/xorg/pcmanfm.conf 'view_mode=list'
 require_content usr/local/share/x-chip/xorg/pcmanfm.conf 'show_statusbar=0'
 require_content usr/local/share/x-chip/xorg/dillorc 'panel_size=small'
 require_content usr/local/share/x-chip/xorg/dillorc 'show_save=NO'
-require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'gtk-font-name = "Sans 9"'
+require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'gtk-font-name = "Luxi Sans 9"'
 require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'gtk-icon-theme-name = "x-chip"'
 require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'style "pocketclean"'
-require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-font-name = Sans 9'
+require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-font-name = Luxi Sans 9'
 require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-icon-theme-name = x-chip'
 require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-application-prefer-dark-theme = false'
 require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*transparent: false'
+require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*inheritPixmap: false'
+require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*fading: 0'
 require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*background: #0F1716'
 require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*cursorColor: #1F7A66'
+require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*font: 8x13'
 require_content usr/local/bin/x-chip-close-app 'pkill -9'
 require_content usr/local/bin/x-chip-close-app 'pcmanfm dillo geany leafpad gpicview ffplay mpg123'
+require_content usr/local/bin/x-chip-close-game 'tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker'
+require_content usr/local/bin/x-chip-close-game 'pkill -9 "$name"'
 require_content usr/local/bin/x-chip-mc 'TERM=rxvt-256color'
 reject_content usr/local/bin/x-chip-mc 'COLORTERM'
 require_content usr/local/bin/x-chip-mc 'MC_SKIN=${MC_SKIN:-pocketclean256}'
@@ -1054,6 +1124,17 @@ require_content usr/local/share/x-chip/xorg/jwmrc '#223331'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-mc'
 reject_content usr/local/share/x-chip/xorg/jwmrc ' -tr'
 reject_content usr/local/share/x-chip/xorg/jwmrc 'transparent'
+reject_content usr/local/share/x-chip/xorg/jwmrc '<Font>Sans-9</Font>'
+reject_content usr/local/share/x-chip/xorg/geany.conf 'editor_font=Monospace 9'
+reject_content usr/local/share/x-chip/xorg/geany.conf 'tagbar_font=Sans 9'
+reject_content usr/local/share/x-chip/xorg/leafpadrc 'Monospace 10'
+reject_content usr/local/share/x-chip/xorg/gtkrc-2.0 'gtk-font-name = "Sans 9"'
+reject_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-font-name = Sans 9'
+reject_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*transparent: true'
+reject_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*inheritPixmap: true'
+reject_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*fading: 70'
+reject_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*shading: 50'
+reject_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*font: fixed'
 reject_content usr/local/share/x-chip/xorg/jwmrc 'label="-">exec:x-chip-brightness down'
 reject_content usr/local/share/x-chip/xorg/jwmrc 'label="+">exec:x-chip-brightness up'
 reject_content usr/local/share/x-chip/xorg/jwmrc '<TrayButton label="Light"'
@@ -1138,6 +1219,7 @@ for script in \
     usr/local/bin/x-chip-desktop-start \
     usr/local/bin/x-chip-gtk-cache \
     usr/local/bin/x-chip-close-app \
+    usr/local/bin/x-chip-close-game \
     usr/local/bin/x-chip-x-apply-calibration \
     usr/local/bin/x-chip-touch-calibrate \
     usr/local/bin/x-chip-xorg-launch-vt \
