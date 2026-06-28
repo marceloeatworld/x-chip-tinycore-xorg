@@ -3217,6 +3217,18 @@ refresh_icon_theme() {
 	run_if_present gtk-update-icon-cache -q -f -t "$dir"
 }
 
+refresh_gdk_pixbuf_loaders() {
+	target=/usr/local/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache
+	[ "$MODE" = full ] || [ ! -s "$target" ] || return 0
+	command -v gdk-pixbuf-query-loaders >/dev/null 2>&1 || return 0
+	tmp="$target.$$"
+	if gdk-pixbuf-query-loaders >"$tmp" 2>>"$LOG"; then
+		mv "$tmp" "$target" 2>>"$LOG" || rm -f "$tmp"
+	else
+		rm -f "$tmp"
+	fi
+}
+
 refresh_file_if_missing() {
 	target=$1
 	shift
@@ -3229,8 +3241,9 @@ mkdir -p /usr/local/lib/gdk-pixbuf-2.0/2.10.0 \
 	/usr/local/share/applications \
 	/usr/local/share/mime 2>/dev/null || true
 
-refresh_file_if_missing /usr/local/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache \
-	gdk-pixbuf-query-loaders --update-cache
+refresh_gdk_pixbuf_loaders
+refresh_file_if_missing /usr/local/share/mime/mime.cache \
+	update-mime-database /usr/local/share/mime
 refresh_file_if_missing /usr/local/share/glib-2.0/schemas/gschemas.compiled \
 	glib-compile-schemas /usr/local/share/glib-2.0/schemas
 
@@ -3242,7 +3255,6 @@ if [ "$MODE" = full ]; then
 	run_if_present gtk-query-immodules-2.0 --update-cache
 	run_if_present gtk-query-immodules-3.0 --update-cache
 	run_if_present update-desktop-database /usr/local/share/applications
-	run_if_present update-mime-database /usr/local/share/mime
 	run_if_present fc-cache -sf
 fi
 EOF
@@ -3921,20 +3933,44 @@ home actions/go-home
 refresh actions/view-refresh
 close actions/process-stop
 close actions/window-close
+close actions/gtk-close
 file actions/document-new
+file actions/gtk-new
 files actions/document-open
+files actions/gtk-open
 editor actions/document-save
+editor actions/gtk-save
 editor actions/document-save-as
 file actions/edit-copy
+file actions/gtk-copy
 file actions/edit-cut
+file actions/gtk-cut
 file actions/edit-paste
+file actions/gtk-paste
 close actions/edit-delete
+close actions/gtk-delete
 back actions/edit-undo
+back actions/gtk-undo
 forward actions/edit-redo
+forward actions/gtk-redo
 refresh actions/edit-find
+refresh actions/gtk-find
 files actions/folder-new
 apps actions/list-add
+apps actions/gtk-add
 close actions/list-remove
+close actions/gtk-remove
+back actions/gtk-go-back
+forward actions/gtk-go-forward
+up actions/gtk-go-up
+home actions/gtk-home
+refresh actions/gtk-refresh
+close actions/gtk-stop
+forward actions/go-jump
+forward actions/gtk-jump-to
+files actions/gtk-directory
+file actions/gtk-file
+pocket actions/gtk-harddisk
 files apps/file-manager
 files apps/pcmanfm
 browser apps/dillo
@@ -3963,6 +3999,8 @@ pocket devices/drive-harddisk-usb
 pocket devices/drive-removable-media-usb
 file mimetypes/text-x-generic
 file mimetypes/unknown
+file status/image-missing
+file status/gtk-missing-image
 editor mimetypes/text-plain
 code mimetypes/application-x-executable
 terminal mimetypes/application-x-shellscript
@@ -4762,6 +4800,17 @@ materialize_tcz_runtime_extensions() {
     rm -f "$tmp_manifest"
 }
 
+compile_host_mime_database() {
+    local mime_dir="$RFS/usr/local/share/mime"
+    [ -d "$mime_dir/packages" ] || return 0
+    if ! command -v update-mime-database >/dev/null 2>&1; then
+        echo "WARN: update-mime-database not found on build host; first boot will generate MIME cache" >&2
+        return 0
+    fi
+    echo ">> compile MIME database"
+    update-mime-database "$mime_dir"
+}
+
 install_firstboot_script() {
     local tmp
     tmp=$(mktemp)
@@ -5347,6 +5396,7 @@ preseed_tcz_extensions
 materialize_tcz_runtime_extensions
 install_preseeded_firmware_fallback
 install_firstboot_script
+compile_host_mime_database
 
 # 4. pack (numeric owners; the flasher rebuilds the UBIFS from this tree).
 normalize_rootfs_metadata
@@ -5418,6 +5468,7 @@ for required in \
     ./usr/local/share/applications/x-chip-text.desktop \
     ./usr/local/share/applications/mimeapps.list \
     ./usr/local/share/applications/mimeinfo.cache \
+    ./usr/local/share/mime/mime.cache \
     ./home/$SSH_USER/Pictures/red-hood-field.jpeg \
     ./home/$SSH_USER/Videos/night-lamp-dream.mp4 \
     ./home/$SSH_USER/Music/dreamscape-sample.mp3 \

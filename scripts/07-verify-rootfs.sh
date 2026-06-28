@@ -345,6 +345,7 @@ for required in \
     usr/local/share/applications/x-chip-text.desktop \
     usr/local/share/applications/mimeapps.list \
     usr/local/share/applications/mimeinfo.cache \
+    usr/local/share/mime/mime.cache \
     usr/local/share/x-chip/xorg/icons/apps.xpm \
     usr/local/share/x-chip/xorg/icons/back.xpm \
     usr/local/share/x-chip/xorg/icons/brightness.xpm \
@@ -535,6 +536,7 @@ for root_owned in \
     usr/local/share/applications/x-chip-text.desktop \
     usr/local/share/applications/mimeapps.list \
     usr/local/share/applications/mimeinfo.cache \
+    usr/local/share/mime/mime.cache \
     usr/local/share/x-chip/tic80-carts.tsv \
     usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example; do
     require_owner "$root_owned" "0/0"
@@ -718,8 +720,10 @@ require_order usr/local/bin/x-chip-startx '^refresh_graphical_caches$' '^install
 require_content usr/local/bin/x-chip-desktop-start 'X_CHIP_DESKTOP_AUTOSTART'
 require_content usr/local/bin/x-chip-desktop-start 'x-chip-startx'
 require_content usr/local/bin/x-chip-gtk-cache 'gtk-update-icon-cache'
-require_content usr/local/bin/x-chip-gtk-cache 'gdk-pixbuf-query-loaders --update-cache'
+require_content usr/local/bin/x-chip-gtk-cache 'gdk-pixbuf-query-loaders >"$tmp"'
+reject_content usr/local/bin/x-chip-gtk-cache 'gdk-pixbuf-query-loaders --update-cache'
 require_content usr/local/bin/x-chip-gtk-cache 'glib-compile-schemas'
+require_content usr/local/bin/x-chip-gtk-cache 'update-mime-database /usr/local/share/mime'
 require_content usr/local/bin/x-chip-gtk-cache 'update-desktop-database'
 require_content usr/local/bin/x-chip-x-apply-calibration 'touchscreen-calibration.matrix'
 require_content usr/local/bin/x-chip-x-apply-calibration 'libinput Calibration Matrix'
@@ -901,14 +905,38 @@ for icon_path in \
     actions/go-next \
     actions/go-up \
     actions/go-home \
+    actions/go-jump \
     actions/view-refresh \
     actions/document-new \
     actions/document-open \
     actions/document-save \
+    actions/gtk-close \
+    actions/gtk-new \
+    actions/gtk-open \
+    actions/gtk-save \
+    actions/gtk-go-back \
+    actions/gtk-go-forward \
+    actions/gtk-go-up \
+    actions/gtk-home \
+    actions/gtk-refresh \
+    actions/gtk-stop \
+    actions/gtk-jump-to \
+    actions/gtk-directory \
+    actions/gtk-file \
+    actions/gtk-harddisk \
     actions/edit-copy \
     actions/edit-paste \
     actions/edit-undo \
     actions/edit-redo \
+    actions/gtk-copy \
+    actions/gtk-cut \
+    actions/gtk-paste \
+    actions/gtk-delete \
+    actions/gtk-undo \
+    actions/gtk-redo \
+    actions/gtk-find \
+    actions/gtk-add \
+    actions/gtk-remove \
     apps/pcmanfm \
     apps/geany \
     places/folder \
@@ -916,7 +944,9 @@ for icon_path in \
     mimetypes/text-x-generic \
     mimetypes/application-pdf \
     mimetypes/audio-x-generic \
-    mimetypes/video-x-generic; do
+    mimetypes/video-x-generic \
+    status/image-missing \
+    status/gtk-missing-image; do
     require_xpm_icon "usr/local/share/icons/x-chip/16x16/$icon_path.xpm"
 done
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-wifi-menu'
