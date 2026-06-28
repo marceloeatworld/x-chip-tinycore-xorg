@@ -267,12 +267,22 @@ for required in \
     usr/local/bin/x-chip-audio-status \
     usr/local/bin/x-chip-power-status \
     usr/local/bin/x-chip-term-hold \
+    usr/local/bin/x-chip-mc \
     usr/local/bin/x-chip-status \
     usr/local/bin/x-chip-calc \
     usr/local/bin/x-chip-time \
+    usr/local/bin/x-chip-open \
     usr/local/bin/x-chip-open-image \
+    usr/local/bin/x-chip-open-pdf \
     usr/local/bin/x-chip-music \
     usr/local/bin/x-chip-video \
+    usr/local/bin/xdg-open \
+    usr/local/bin/x-chip-tic80 \
+    usr/local/bin/x-chip-goattracker \
+    usr/local/bin/x-chip-mgba \
+    usr/local/bin/x-chip-pico8 \
+    usr/local/bin/x-chip-games \
+    usr/local/bin/x-chip-doom \
     usr/local/bin/x-chip-desktop-stats \
     usr/local/bin/x-chip-logs \
     usr/local/bin/x-chip-brightness \
@@ -308,7 +318,18 @@ for required in \
     usr/local/etc/x-chip/wifi.conf \
     usr/local/share/x-chip/xorg/touchscreen-calibration.matrix \
     usr/local/share/x-chip/xorg/jwmrc \
+    usr/local/share/x-chip/xorg/mc.ini \
+    usr/local/share/mc/skins/electricblue256.ini \
     usr/local/share/x-chip/xorg/wallpapers/pocket-core.png \
+    usr/local/share/x-chip/xorg/Xdefaults \
+    usr/local/share/x-chip/xorg/mc-media.ext.ini \
+    usr/local/share/applications/x-chip-image.desktop \
+    usr/local/share/applications/x-chip-video.desktop \
+    usr/local/share/applications/x-chip-music.desktop \
+    usr/local/share/applications/x-chip-pdf.desktop \
+    usr/local/share/applications/x-chip-text.desktop \
+    usr/local/share/applications/mimeapps.list \
+    usr/local/share/applications/mimeinfo.cache \
     usr/local/share/x-chip/xorg/icons/apps.xpm \
     usr/local/share/x-chip/xorg/icons/back.xpm \
     usr/local/share/x-chip/xorg/icons/brightness.xpm \
@@ -347,12 +368,18 @@ for required in \
     usr/local/share/x-chip/xorg/dillorc \
     usr/local/share/x-chip/xorg/gtkrc-2.0 \
     usr/local/share/x-chip/xorg/gtk3-settings.ini \
+    usr/local/share/x-chip/xorg/Xdefaults \
+    usr/local/share/x-chip/tic80-carts.tsv \
     usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example \
     usr/local/etc/ssh/sshd_config \
     home/$SSH_USER/Pictures \
     home/$SSH_USER/Videos \
     home/$SSH_USER/Music \
     home/$SSH_USER/Downloads \
+    home/$SSH_USER/Games/GameBoy \
+    home/$SSH_USER/Pictures/red-hood-field.jpeg \
+    home/$SSH_USER/Videos/night-lamp-dream.mp4 \
+    home/$SSH_USER/Music/dreamscape-sample.mp3 \
     usr/share/kmap/pocketchip.kmap \
     usr/share/kmap/pocketchip.loadkeys \
     lib/firmware/nextthingco/chip/early/x-chip-pocketchip.dtbo \
@@ -387,9 +414,18 @@ for root_owned in \
     usr/local/bin/x-chip-status \
     usr/local/bin/x-chip-calc \
     usr/local/bin/x-chip-time \
+    usr/local/bin/x-chip-open \
     usr/local/bin/x-chip-open-image \
+    usr/local/bin/x-chip-open-pdf \
     usr/local/bin/x-chip-music \
     usr/local/bin/x-chip-video \
+    usr/local/bin/xdg-open \
+    usr/local/bin/x-chip-tic80 \
+    usr/local/bin/x-chip-goattracker \
+    usr/local/bin/x-chip-mgba \
+    usr/local/bin/x-chip-pico8 \
+    usr/local/bin/x-chip-games \
+    usr/local/bin/x-chip-doom \
     usr/local/bin/x-chip-desktop-stats \
     usr/local/bin/x-chip-logs \
     usr/local/bin/x-chip-brightness \
@@ -454,6 +490,16 @@ for root_owned in \
     usr/local/share/x-chip/xorg/dillorc \
     usr/local/share/x-chip/xorg/gtkrc-2.0 \
     usr/local/share/x-chip/xorg/gtk3-settings.ini \
+    usr/local/share/x-chip/xorg/Xdefaults \
+    usr/local/share/x-chip/xorg/mc-media.ext.ini \
+    usr/local/share/applications/x-chip-image.desktop \
+    usr/local/share/applications/x-chip-video.desktop \
+    usr/local/share/applications/x-chip-music.desktop \
+    usr/local/share/applications/x-chip-pdf.desktop \
+    usr/local/share/applications/x-chip-text.desktop \
+    usr/local/share/applications/mimeapps.list \
+    usr/local/share/applications/mimeinfo.cache \
+    usr/local/share/x-chip/tic80-carts.tsv \
     usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example; do
     require_owner "$root_owned" "0/0"
 done
@@ -470,9 +516,18 @@ require_mode_pattern usr/local/bin/x-chip-term-hold '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-status '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-calc '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-time '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-open '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-open-image '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-open-pdf '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-music '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-video '-rwx*'
+require_type usr/local/bin/xdg-open l
+require_mode_pattern usr/local/bin/x-chip-tic80 '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-goattracker '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-mgba '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-pico8 '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-games '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-doom '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-desktop-stats '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-logs '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-brightness '-rwx*'
@@ -510,6 +565,7 @@ require_entry "home/$SSH_USER/.ssh/authorized_keys"
 require_owner "home/$SSH_USER" "$SSH_UID/$SSH_GID"
 require_owner "home/$SSH_USER/.ssh" "$SSH_UID/$SSH_GID"
 require_owner "home/$SSH_USER/.ssh/authorized_keys" "$SSH_UID/$SSH_GID"
+require_owner "home/$SSH_USER/Games/GameBoy" "$SSH_UID/$SSH_GID"
 require_mode_pattern "home/$SSH_USER/.ssh" 'drwx------'
 require_mode_pattern "home/$SSH_USER/.ssh/authorized_keys" '-rw-------'
 if [ "${REQUIRE_AUTHORIZED_KEYS:-1}" = 1 ]; then
@@ -519,6 +575,24 @@ if [ "${PUBLIC_IMAGE:-0}" = 1 ]; then
     require_empty "home/$SSH_USER/.ssh/authorized_keys"
     require_empty "root/.ssh/authorized_keys"
     reject_entry etc/wpa_supplicant.conf
+    if awk -v user="$SSH_USER" '
+        BEGIN { prefix1 = "home/" user "/Games/GameBoy/"; prefix2 = "./" prefix1 }
+        {
+            path = $0
+            if ((index(path, prefix1) == 1 || index(path, prefix2) == 1) &&
+                path ~ /\.(gb|gbc|gba|GB|GBC|GBA)$/) {
+                print path
+                found = 1
+            }
+        }
+        END { exit found ? 0 : 1 }
+    ' "$TMP_LIST" >/tmp/x-chip-public-roms.$$; then
+        echo "ERROR: public image contains Game Boy ROM(s):" >&2
+        cat /tmp/x-chip-public-roms.$$ >&2
+        rm -f /tmp/x-chip-public-roms.$$
+        exit 1
+    fi
+    rm -f /tmp/x-chip-public-roms.$$
 fi
 if [ "$SSH_PASSWORD_AUTH" = 1 ]; then
     require_loginable_shadow
@@ -620,9 +694,49 @@ require_content usr/local/bin/x-chip-status 'ifconfig "$iface"'
 require_content usr/local/bin/x-chip-calc 'bc -l'
 require_content usr/local/bin/x-chip-time 'ntpd -nq'
 require_content usr/local/bin/x-chip-time 'sync-background'
+require_content usr/local/bin/x-chip-open 'x-chip-open-image "$target"'
+require_content usr/local/bin/x-chip-open 'x-chip-video play "$target"'
+require_content usr/local/bin/x-chip-open 'x-chip-music play-bg "$target"'
+require_content usr/local/bin/x-chip-open 'x-chip-open-pdf "$target"'
 require_content usr/local/bin/x-chip-open-image 'gpicview'
+require_content usr/local/bin/x-chip-open-pdf 'No PDF viewer is installed yet.'
 require_content usr/local/bin/x-chip-music 'mpg123 -C'
+require_content usr/local/bin/x-chip-music 'play-bg'
 require_content usr/local/bin/x-chip-video 'ffplay -autoexit'
+require_content usr/local/bin/x-chip-video 'SDL_RENDER_DRIVER=${SDL_RENDER_DRIVER:-software}'
+require_content usr/local/share/applications/x-chip-image.desktop 'MimeType=image/png;image/jpeg;image/gif;image/webp;image/x-xpixmap;'
+require_content usr/local/share/applications/x-chip-video.desktop 'MimeType=video/mp4;video/x-m4v;video/x-msvideo;video/quicktime;video/x-matroska;video/webm;video/mpeg;'
+require_content usr/local/share/applications/x-chip-music.desktop 'x-chip-music play-bg %f'
+require_content usr/local/share/applications/x-chip-pdf.desktop 'MimeType=application/pdf;'
+require_content usr/local/share/applications/mimeapps.list 'image/jpeg=x-chip-image.desktop'
+require_content usr/local/share/applications/mimeapps.list 'video/mp4=x-chip-video.desktop'
+require_content usr/local/share/applications/mimeapps.list 'audio/mpeg=x-chip-music.desktop'
+require_content usr/local/share/applications/mimeapps.list 'application/pdf=x-chip-pdf.desktop'
+require_content usr/local/share/x-chip/xorg/mc-media.ext.ini 'x-chip media handlers'
+require_content usr/local/share/x-chip/xorg/mc-media.ext.ini 'x-chip-open-pdf "$MC_EXT_FILENAME"'
+require_nonempty home/$SSH_USER/Pictures/red-hood-field.jpeg
+require_nonempty home/$SSH_USER/Videos/night-lamp-dream.mp4
+require_nonempty home/$SSH_USER/Music/dreamscape-sample.mp3
+require_content usr/local/bin/x-chip-tic80 'tce-load -il /tce/optional/tic80.tcz'
+require_content usr/local/bin/x-chip-tic80 'tic80-carts.tsv'
+require_content usr/local/bin/x-chip-goattracker 'tce-load -il /tce/optional/goattracker.tcz'
+require_content usr/local/bin/x-chip-mgba 'tce-load -il /tce/optional/mgba.tcz'
+require_content usr/local/bin/x-chip-mgba 'Games/GameBoy'
+require_content usr/local/bin/x-chip-mgba 'mgba-sdl1'
+require_content usr/local/bin/x-chip-mgba 'SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-x11}'
+require_content usr/local/bin/x-chip-mgba 'SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}'
+require_content usr/local/bin/x-chip-mgba 'exec "$cmd" -1 "$@"'
+require_content usr/local/bin/x-chip-pico8 'PICO-8 is not bundled'
+require_content usr/local/bin/x-chip-pico8 '-windowed 1 -width 480 -height 272'
+require_content usr/local/bin/x-chip-games 'x-chip-mgba menu'
+require_content usr/local/bin/x-chip-games 'x-chip-doom run'
+require_content usr/local/bin/x-chip-games 'x-chip-pico8 menu'
+require_content usr/local/bin/x-chip-doom 'tce-load -il /tce/optional/doom.tcz'
+require_content usr/local/bin/x-chip-doom 'freedoom1.wad'
+require_content usr/local/bin/x-chip-doom 'SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}'
+require_content usr/local/bin/x-chip-doom '-nosound -nomusic'
+require_content usr/local/share/x-chip/tic80-carts.tsv '8-bit-panda'
+require_content usr/local/share/x-chip/tic80-carts.tsv 'https://tic80.com/cart/'
 require_content usr/local/bin/x-chip-desktop-stats 'conky -c'
 require_content usr/local/bin/x-chip-wifi-menu 'iw dev "$iface" scan'
 require_content usr/local/bin/x-chip-wifi-menu 'wpa_supplicant -B'
@@ -656,14 +770,25 @@ require_content opt/.filetool.lst 'usr/local/bin/x-chip-term-hold'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-status'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-calc'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-time'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-open'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-open-image'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-open-pdf'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-music'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-video'
+require_content opt/.filetool.lst 'usr/local/bin/xdg-open'
+require_content opt/.filetool.lst 'usr/local/share/applications'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-tic80'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-goattracker'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-mgba'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-pico8'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-games'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-doom'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-desktop-stats'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-brightness'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-wifi-menu'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-desktop-start'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-close-app'
+require_content opt/.filetool.lst 'usr/local/share/x-chip/tic80-carts.tsv'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'Driver "fbdev"'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'AutoBindGPU'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'MatchProduct "1c25000.rtp"'
@@ -678,6 +803,8 @@ require_content usr/local/share/x-chip/xorg/jwmrc '<DefaultIcon>pocket.xpm</Defa
 require_content usr/local/share/x-chip/xorg/jwmrc '<StartupCommand>x-chip-x-apply-calibration</StartupCommand>'
 require_content usr/local/share/x-chip/xorg/jwmrc '<RestartCommand>x-chip-x-apply-calibration</RestartCommand>'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Menu" icon="menu.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="Play" icon="pocket.xpm" popup="Games"'
+require_content usr/local/share/x-chip/xorg/jwmrc '<TaskList maxwidth="160"/>'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Browser" icon="browser.xpm">dillo -g 474x212+0+0'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Files" icon="files.xpm">pcmanfm'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Editor" icon="editor.xpm">leafpad'
@@ -686,6 +813,17 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'label="Calculator" icon="pock
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Images" icon="image.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Music" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Video" icon="monitor.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="Games" icon="apps.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="Game Launcher" icon="apps.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="Doom" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-doom run'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="Game Boy Launcher" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-mgba'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="PICO-8" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-pico8 menu'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-games'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-tic80 play 8-bit-panda'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-goattracker'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Apps" icon="apps.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Network" icon="network.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Brightness" icon="brightness.xpm"'
@@ -724,10 +862,32 @@ require_content usr/local/share/x-chip/xorg/dillorc 'panel_size=small'
 require_content usr/local/share/x-chip/xorg/dillorc 'show_save=NO'
 require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'gtk-font-name = "Sans 9"'
 require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'gtk-icon-theme-name = "x-chip"'
+require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'style "electricblue"'
 require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-font-name = Sans 9'
 require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-icon-theme-name = x-chip'
+require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-application-prefer-dark-theme = false'
+require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*transparent: false'
+require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*background: #262626'
+require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*cursorColor: #00afff'
 require_content usr/local/bin/x-chip-close-app 'pkill -9'
 require_content usr/local/bin/x-chip-close-app 'pcmanfm dillo geany leafpad gpicview ffplay mpg123'
+require_content usr/local/bin/x-chip-mc 'TERM=rxvt-256color'
+reject_content usr/local/bin/x-chip-mc 'COLORTERM'
+require_content usr/local/bin/x-chip-mc 'MC_SKIN=${MC_SKIN:-electricblue256}'
+require_content usr/local/share/x-chip/xorg/mc.ini 'skin=electricblue256'
+require_content usr/local/share/x-chip/xorg/mc.ini '[Layout]'
+require_content usr/local/share/x-chip/xorg/mc.ini 'command_prompt=0'
+require_content usr/local/share/x-chip/xorg/mc.ini 'keybar_visible=0'
+require_content usr/local/share/mc/skins/electricblue256.ini '256colors = true'
+require_content usr/local/share/mc/skins/electricblue256.ini '_default_ = color254;color235'
+require_content usr/local/share/mc/skins/electricblue256.ini 'selected = color254;color240'
+require_content usr/local/share/x-chip/xorg/jwmrc '#262626'
+require_content usr/local/share/x-chip/xorg/jwmrc '#e4e4e4'
+require_content usr/local/share/x-chip/xorg/jwmrc '#00afff'
+require_content usr/local/share/x-chip/xorg/jwmrc '#444444'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-mc'
+reject_content usr/local/share/x-chip/xorg/jwmrc ' -tr'
+reject_content usr/local/share/x-chip/xorg/jwmrc 'transparent'
 reject_content usr/local/share/x-chip/xorg/jwmrc 'label="-">exec:x-chip-brightness down'
 reject_content usr/local/share/x-chip/xorg/jwmrc 'label="+">exec:x-chip-brightness up'
 reject_content usr/local/share/x-chip/xorg/jwmrc '<TrayButton label="Light"'
@@ -788,12 +948,21 @@ for script in \
     usr/local/bin/x-chip-audio-status \
     usr/local/bin/x-chip-power-status \
     usr/local/bin/x-chip-term-hold \
+    usr/local/bin/x-chip-mc \
     usr/local/bin/x-chip-status \
     usr/local/bin/x-chip-calc \
     usr/local/bin/x-chip-time \
+    usr/local/bin/x-chip-open \
     usr/local/bin/x-chip-open-image \
+    usr/local/bin/x-chip-open-pdf \
     usr/local/bin/x-chip-music \
     usr/local/bin/x-chip-video \
+    usr/local/bin/x-chip-tic80 \
+    usr/local/bin/x-chip-goattracker \
+    usr/local/bin/x-chip-mgba \
+    usr/local/bin/x-chip-pico8 \
+    usr/local/bin/x-chip-games \
+    usr/local/bin/x-chip-doom \
     usr/local/bin/x-chip-desktop-stats \
     usr/local/bin/x-chip-logs \
     usr/local/bin/x-chip-brightness \
@@ -830,6 +999,43 @@ if [ "${PRESEED_TCZ:-1}" = 1 ]; then
             require_entry "tce/optional/$ext"
         done < "$ext_list"
     done
+    if has_entry "tce/optional/tic80.tcz"; then
+        require_entry "tce/optional/tic80.tcz.dep"
+        require_entry "tce/optional/mesa.tcz"
+        require_entry "tce/optional/curl.tcz"
+        require_entry "tce/optional/libasound.tcz"
+        require_entry "tce/optional/gcc_libs.tcz"
+        require_entry "tce/optional/Xlibs.tcz"
+        require_content "tce/optional/tic80.tcz.dep" 'mesa.tcz'
+        reject_content tce/onboot.lst 'tic80.tcz'
+    fi
+    if has_entry "tce/optional/goattracker.tcz"; then
+        require_entry "tce/optional/goattracker.tcz.dep"
+        require_entry "tce/optional/SDL.tcz"
+        require_entry "tce/optional/gcc_libs.tcz"
+        require_content "tce/optional/goattracker.tcz.dep" 'SDL.tcz'
+        reject_content tce/onboot.lst 'goattracker.tcz'
+    fi
+    if has_entry "tce/optional/mgba.tcz"; then
+        require_entry "tce/optional/mgba.tcz.dep"
+        require_entry "tce/optional/SDL.tcz"
+        require_entry "tce/optional/pixman.tcz"
+        require_entry "tce/optional/gcc_libs.tcz"
+        require_content "tce/optional/mgba.tcz.dep" 'SDL.tcz'
+        require_content "tce/optional/mgba.tcz.dep" 'pixman.tcz'
+        reject_content tce/onboot.lst 'mgba.tcz'
+    fi
+    if has_entry "tce/optional/doom.tcz"; then
+        require_entry "tce/optional/doom.tcz.dep"
+        require_entry "tce/optional/sdl2.tcz"
+        require_entry "tce/optional/sdl2_mixer.tcz"
+        require_entry "tce/optional/sdl2_net.tcz"
+        require_entry "tce/optional/libsamplerate.tcz"
+        require_entry "tce/optional/gcc_libs.tcz"
+        require_content "tce/optional/doom.tcz.dep" 'sdl2_mixer.tcz'
+        require_content "tce/optional/doom.tcz.dep" 'libsamplerate.tcz'
+        reject_content tce/onboot.lst 'doom.tcz'
+    fi
 fi
 
 echo ">> verified $ROOTFS"

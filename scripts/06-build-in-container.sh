@@ -98,6 +98,9 @@ DOCKER_ARGS=(
     -e SSH_PASSWORD_HASH="${SSH_PASSWORD_HASH:-}" \
     -e SSH_PASSWORD_SALT="${SSH_PASSWORD_SALT:-xchiptinycore}" \
     -e PRESEED_TCZ="${PRESEED_TCZ:-1}" \
+    -e INCLUDE_PRIVATE_ROMS="${INCLUDE_PRIVATE_ROMS:-0}" \
+    -e PRIVATE_ROMS_DIR="${PRIVATE_ROMS_DIR:-dist/private-roms/GameBoy}" \
+    -e COMMUNITY_TCZ_DIR="${COMMUNITY_TCZ_DIR:-dist/community-tcz}" \
     -e OUT="$OUT" \
     -e ROOTFS_FORCE_FAKEROOT=1 \
 )

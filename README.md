@@ -12,7 +12,7 @@ xorg-rootfs.tar.gz
 Target:
 
 - TinyCore/CorePure armhf 16.x
-- Linux `6.18.36-chip-tc`
+- Linux `6.18.37-chip-tc`
 - NAND/UBIFS boot through `x-chip-tools`
 - LCD console, serial console, WiFi, SSH
 - Xorg/JWM desktop starts by default after boot
@@ -210,6 +210,71 @@ experiments at:
 /usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example
 ```
 
+## Optional Community Apps
+
+The base image stays small and does not boot extra game or music software. For
+community builds, optional `.tcz` extensions can be built separately:
+
+```sh
+make community-tcz
+```
+
+or one app at a time:
+
+```sh
+./scripts/09-build-community-tcz.sh goattracker
+./scripts/09-build-community-tcz.sh tic80
+./scripts/09-build-community-tcz.sh mgba
+./scripts/09-build-community-tcz.sh doom
+```
+
+Outputs are written to:
+
+```text
+dist/community-tcz/
+```
+
+Current optional recipes:
+
+- `goattracker.tcz`: C64 music editor, built from Debian source
+  `goattracker 2.77+ds-1`
+- `tic80.tcz`: TIC-80 fantasy computer, built from upstream tag `v1.1.2837`
+- `mgba.tcz`: Game Boy, Game Boy Color, and Game Boy Advance emulator, built
+  from upstream mGBA tag `0.10.5` with the lightweight SDL 1.2 frontend
+- `doom.tcz`: Chocolate Doom built from upstream tag `chocolate-doom-3.1.1`
+  with the free Freedoom `0.13.0` Phase 1 IWAD
+- PICO-8 launcher: the image includes a menu wrapper, but does not bundle the
+  commercial PICO-8 binary
+
+If `dist/community-tcz/` exists when the rootfs is assembled, the builder caches
+`tic80.tcz`, `goattracker.tcz`, `mgba.tcz`, `doom.tcz`, and their runtime
+dependencies in `/tce/optional`. They are still not added to `tce/onboot.lst`,
+`tce/xorg.lst`, or `tce/media.lst`, so they do not load during boot. JWM exposes
+them under `Games`. The `Play` tray button opens a compact game launcher, and
+the wrappers run `tce-load -i` only when the user clicks TIC-80, GoatTracker,
+Game Boy, or Doom.
+
+The TIC-80 menu includes a curated top-rated game list. The image does not
+redistribute `.tic` cartridges; `x-chip-tic80` downloads each cart from
+`tic80.com` on first launch and stores it under `~/TIC-80/carts`.
+`doom.tcz` includes Freedoom Phase 1, which is a free replacement IWAD; commercial
+Doom WAD files are not bundled. The Doom launcher defaults to silent audio on
+PocketCHIP because SDL audio can block startup on this hardware; set
+`X_CHIP_DOOM_SOUND=1` before launching to test audio.
+mGBA does not include ROMs; put legal `.gb`, `.gbc`, or `.gba` files in
+`~/Games/GameBoy` or `~/Downloads`.
+For PICO-8, install your licensed Linux ARM files under `~/pico-8/pico8`,
+`~/pico8/pico8`, `/opt/pico-8/pico8`, or set `X_CHIP_PICO8_BIN`.
+
+For a private image only, legal local ROMs can be copied into the rootfs with:
+
+```sh
+INCLUDE_PRIVATE_ROMS=1 PRIVATE_ROMS_DIR=dist/private-roms/GameBoy make rootfs
+```
+
+This is rejected when `PUBLIC_IMAGE=1`, and public release verification fails
+if any `.gb`, `.gbc`, or `.gba` file is found under `~/Games/GameBoy`.
+
 ## Public Build
 
 Use this for a GitHub release asset:
@@ -267,6 +332,7 @@ scripts/05-flash-local.sh
 scripts/05-flash-via-host.sh
 scripts/07-verify-rootfs.sh
 scripts/08-package-release.sh
+scripts/09-build-community-tcz.sh
 ```
 
 ## Defaults
@@ -285,6 +351,10 @@ scripts/08-package-release.sh
 - Optional media pack: `/tce/media.lst` pre-seeds `ffmpeg.tcz` and
   `mpg123.tcz`; it is loaded on demand by `x-chip-media-on` for `ffplay` video
   playback and console MP3 playback, not at boot
+- Optional community app pack: `dist/community-tcz/` can contain `tic80.tcz`,
+  `goattracker.tcz`, `mgba.tcz`, and `doom.tcz`; when present during rootfs
+  assembly they are cached in `/tce/optional` and launched from the JWM `Games`
+  menu on demand, not loaded at boot
 - Desktop pack: `/tce/xorg.lst` pre-seeds Xorg, fbdev, flwm/jwm, aterm,
   xrandr, xinput, Geany's `libffi6.tcz` runtime dependency, `bc`, `gpicview`,
   `conky`, and desktop apps; it is loaded by `x-chip-desktop-start` at boot

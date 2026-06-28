@@ -20,6 +20,32 @@ The build downloads or consumes these external components:
 - `nextthingco/x-chip-tools` for FEL/U-Boot/NAND flashing support.
   This repo uses it as an external flasher; it is not bundled here.
 
+Optional community `.tcz` extras are built only when requested with
+`scripts/09-build-community-tcz.sh`:
+
+- TIC-80 from `https://github.com/nesbox/TIC-80`.
+  License: MIT, as provided by the upstream source tree.
+- GoatTracker from Debian source package `goattracker`.
+  Upstream: `https://cadaver.github.io/tools.html`.
+  License: GPL-2-or-later, as provided by the Debian source package.
+- mGBA from `https://github.com/mgba-emu/mgba`.
+  License: MPL-2.0, as provided by the upstream source tree.
+- Chocolate Doom from `https://github.com/chocolate-doom/chocolate-doom`.
+  License: GPL-2-or-later, as provided by the upstream source tree.
+- Freedoom from `https://freedoom.github.io/`.
+  License: BSD-3-Clause-style terms, as provided in `COPYING.txt` in the
+  Freedoom release archive.
+
+The TIC-80 game menu ships only a small manifest of public `tic80.com` cart
+URLs. Cartridge files are not vendored in this repository and should not be
+redistributed in public release assets without permission from the cartridge
+authors.
+
+Game Boy, Game Boy Color, and Game Boy Advance ROM files are not bundled and
+must not be redistributed in public release assets unless the distributor has
+the rights to do so. Commercial Doom WAD files are not bundled either; the Doom
+launcher uses the free Freedoom Phase 1 IWAD from `doom.tcz`.
+
 ## Firmware
 
 The image may include Realtek RTL8723BS firmware. For private builds this can be

@@ -63,3 +63,11 @@
 		interrupt-names = "host-wake";
 	};
 };
+
+/*
+ * Keep the same board fix as chip-debroot's known-good CHIP DTS. Leaving MBUS
+ * enabled on this board is documented there as an upstream bug.
+ */
+&mbus {
+	status = "disabled";
+};

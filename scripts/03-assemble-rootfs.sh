@@ -641,6 +641,7 @@ EOF
 install_hardware_debug_tools() {
     need_root install -d "$RFS/usr/local/bin"
     need_root install -d "$RFS/usr/local/etc/x-chip"
+    need_root install -d "$RFS/usr/local/share/x-chip"
     install_text 0644 "$RFS/usr/local/etc/x-chip/display.conf" <<EOF
 LCD_BRIGHTNESS=${LCD_BRIGHTNESS:-6}
 EOF
@@ -767,6 +768,57 @@ fi
 echo "Press enter to close."
 read _ || true
 exit 0
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-mc" <<'EOF'
+#!/bin/sh
+
+case "${TERM:-}" in
+	*256color) ;;
+	*)
+		TERM=rxvt-256color
+		export TERM
+		;;
+esac
+
+MC_SKIN=${MC_SKIN:-electricblue256}
+export MC_SKIN
+
+ensure_x_chip_mc_ext() {
+	conf_dir=${XDG_CONFIG_HOME:-$HOME/.config}/mc
+	ext="$conf_dir/mc.ext.ini"
+	snippet=/usr/local/share/x-chip/xorg/mc-media.ext.ini
+	[ -r "$snippet" ] || return 0
+	mkdir -p "$conf_dir"
+	if [ ! -f "$ext" ]; then
+		if [ -r /usr/local/etc/mc/mc.ext.ini ]; then
+			cp /usr/local/etc/mc/mc.ext.ini "$ext"
+		else
+			printf '[mc.ext.ini]\nVersion=4.0\n\n' > "$ext"
+		fi
+	fi
+	grep -q 'x-chip media handlers' "$ext" 2>/dev/null && return 0
+	tmp="$ext.tmp.$$"
+	awk -v snippet="$snippet" '
+		BEGIN { inserted = 0 }
+		!inserted && /^\[[^]]+\]/ && $0 != "[mc.ext.ini]" {
+			while ((getline line < snippet) > 0) print line
+			close(snippet)
+			print ""
+			inserted = 1
+		}
+		{ print }
+		END {
+			if (!inserted) {
+				while ((getline line < snippet) > 0) print line
+				close(snippet)
+			}
+		}
+	' "$ext" > "$tmp" && mv "$tmp" "$ext"
+}
+
+ensure_x_chip_mc_ext
+exec mc "$@"
 EOF
 
     install_text 0755 "$RFS/usr/local/bin/x-chip-status" <<'EOF'
@@ -1171,11 +1223,115 @@ file=$(sed -n "${choice}p" "$tmp")
 open_file "$file"
 EOF
 
+    install_text 0755 "$RFS/usr/local/bin/x-chip-open-pdf" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+
+file=${1:-}
+[ -n "$file" ] || {
+	echo "Usage: x-chip-open-pdf FILE" >&2
+	exit 2
+}
+[ -f "$file" ] || {
+	echo "Not a file: $file" >&2
+	exit 1
+}
+
+for viewer in mupdf epdfview xpdf zathura evince qpdfview; do
+	if command -v "$viewer" >/dev/null 2>&1; then
+		DISPLAY="$DISPLAY" exec "$viewer" "$file"
+	fi
+done
+
+msg='No PDF viewer is installed yet.'
+if command -v aterm >/dev/null 2>&1; then
+	DISPLAY="$DISPLAY" exec aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' \
+		-geometry 58x14+0+0 -title PDF -e x-chip-term-hold sh -c \
+		'echo "$1"; echo; echo "File:"; echo "$2"' sh "$msg" "$file"
+fi
+
+echo "$msg" >&2
+echo "$file" >&2
+exit 1
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-open" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+export DISPLAY
+
+open_one() {
+	target=$1
+	case "$target" in
+		file://*) target=${target#file://} ;;
+	esac
+
+	case "$target" in
+		http://*|https://*)
+			if command -v dillo >/dev/null 2>&1; then
+				exec dillo -g 474x212+0+0 "$target"
+			fi
+			exec links "$target"
+			;;
+	esac
+
+	if [ -d "$target" ]; then
+		exec pcmanfm "$target"
+	fi
+
+	[ -f "$target" ] || {
+		echo "Not found: $target" >&2
+		return 1
+	}
+
+	lower=$(printf '%s\n' "$target" | tr 'A-Z' 'a-z')
+	case "$lower" in
+		*.png|*.jpg|*.jpeg|*.gif|*.webp|*.xpm)
+			exec x-chip-open-image "$target"
+			;;
+		*.mp4|*.m4v|*.avi|*.mov|*.mkv|*.webm|*.mpg|*.mpeg)
+			exec x-chip-video play "$target"
+			;;
+		*.mp3)
+			exec x-chip-music play-bg "$target"
+			;;
+		*.pdf)
+			exec x-chip-open-pdf "$target"
+			;;
+		*.htm|*.html)
+			exec dillo -g 474x212+0+0 "$target"
+			;;
+		*.txt|*.log|*.md|*.sh|*.conf|*.ini|*.lst)
+			exec leafpad "$target"
+			;;
+	esac
+
+	exec leafpad "$target"
+}
+
+[ "$#" -gt 0 ] || {
+	echo "Usage: x-chip-open FILE_OR_URL" >&2
+	exit 2
+}
+
+for target in "$@"; do
+	open_one "$target"
+done
+EOF
+
+    need_root ln -sfn x-chip-open "$RFS/usr/local/bin/xdg-open"
+
     install_text 0755 "$RFS/usr/local/bin/x-chip-music" <<'EOF'
 #!/bin/sh
 set -eu
 
 HOME_DIR=${HOME:-/home/chip}
+PID_FILE=/tmp/x-chip-music.pid
+LOG_FILE=/tmp/x-chip-music.log
 
 load_media() {
 	x-chip-media-on >/tmp/x-chip-media-on.log 2>&1 || {
@@ -1214,10 +1370,23 @@ play_file() {
 	mpg123 -C "$file"
 }
 
+play_background() {
+	file=$1
+	[ -f "$file" ] || {
+		echo "Not a file: $file" >&2
+		return 1
+	}
+	load_media
+	pkill -x mpg123 2>/dev/null || killall mpg123 2>/dev/null || true
+	nohup mpg123 "$file" >"$LOG_FILE" 2>&1 &
+	echo "$!" >"$PID_FILE"
+}
+
 case "${1:-menu}" in
 	status) status; exit 0 ;;
-	stop) pkill -x mpg123 2>/dev/null || killall mpg123 2>/dev/null || true; exit 0 ;;
+	stop) pkill -x mpg123 2>/dev/null || killall mpg123 2>/dev/null || true; rm -f "$PID_FILE"; exit 0 ;;
 	play) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-music play FILE" >&2; exit 2; }; play_file "$1"; exit $? ;;
+	play-bg) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-music play-bg FILE" >&2; exit 2; }; play_background "$1"; exit $? ;;
 esac
 
 if [ "$#" -gt 0 ] && [ "$1" != menu ]; then
@@ -1259,6 +1428,8 @@ set -eu
 
 DISPLAY=${DISPLAY:-:0}
 HOME_DIR=${HOME:-/home/chip}
+SDL_RENDER_DRIVER=${SDL_RENDER_DRIVER:-software}
+export SDL_RENDER_DRIVER
 
 load_media() {
 	x-chip-media-on >/tmp/x-chip-media-on.log 2>&1 || {
@@ -1301,7 +1472,8 @@ play_file() {
 		return 1
 	}
 	load_media
-	DISPLAY="$DISPLAY" ffplay -autoexit -window_title "Video" -x 474 -y 212 "$file"
+	DISPLAY="$DISPLAY" SDL_RENDER_DRIVER="$SDL_RENDER_DRIVER" \
+		ffplay -autoexit -window_title "Video" -x 474 -y 212 "$file"
 }
 
 case "${1:-menu}" in
@@ -1341,6 +1513,613 @@ file=$(sed -n "${choice}p" "$tmp")
 	exit 2
 }
 play_file "$file"
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/tic80-carts.tsv" <<'EOF'
+# slug	title	filename	url	source_page
+8-bit-panda	8 Bit Panda	8-bit-panda.tic	https://tic80.com/cart/b88b74e7a6f923251de764d89d6f3507/cart.tic	https://tic80.com/play?cart=188
+stele	Stele	stele.tic	https://tic80.com/cart/d00e434d28ec464bf98aa96a4d53cefe/cart.tic	https://tic80.com/play?cart=483
+balmung	Balmung	balmung.tic	https://tic80.com/cart/4fb4348371246d26e9eb7f30e89a444d/cart.tic	https://tic80.com/play?cart=636
+supernova	Supernova	supernova.tic	https://tic80.com/cart/6e44e8213e39ffb32ec6163f9c595dec/cart.tic	https://tic80.com/play?cart=645
+turns-of-war	Turns of War	turns-of-war.tic	https://tic80.com/cart/edd382c230b67b29c728dbcb76422084/cart.tic	https://tic80.com/play?cart=833
+cauliflower-power	Cauliflower Power	cauliflower-power.tic	https://tic80.com/cart/74d69f265855b2a8c38ad45116bf48d7/cart.tic	https://tic80.com/play?cart=566
+minetic	Minetic	minetic.tic	https://tic80.com/cart/739f92b6c28e237d408c3aa3fe28a521/cart.tic	https://tic80.com/play?cart=665
+powder-game	Powder Game	powder-game.tic	https://tic80.com/cart/86883747bfcb2343936428c073bb01d5/cart.tic	https://tic80.com/play?cart=692
+secret-agents	Secret Agents	secret-agents.tic	https://tic80.com/cart/2d94108c9eb58d40888501cc4a1ea25c/cart.tic	https://tic80.com/play?cart=548
+komet	Komet	komet.tic	https://tic80.com/cart/c35192c128f4bf51041e25efe50da44b/cart.tic	https://tic80.com/play?cart=610
+the-sky-house	The Sky House	the-sky-house.tic	https://tic80.com/cart/b43a71cbe200fa37a2e13a7c4f8d7fa4/cart.tic	https://tic80.com/play?cart=328
+tic-sweeper	TIC-Sweeper	tic-sweeper.tic	https://tic80.com/cart/807a8e8dc8407ab8ba1e4f687acbb1af/cart.tic	https://tic80.com/play?cart=125
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-tic80" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+HOME_DIR=${HOME:-/home/chip}
+MANIFEST=${X_CHIP_TIC80_CARTS_MANIFEST:-/usr/local/share/x-chip/tic80-carts.tsv}
+CART_DIR=${X_CHIP_TIC80_CART_DIR:-$HOME_DIR/TIC-80/carts}
+
+run_as_root() {
+	if [ "$(id -u)" = 0 ]; then
+		"$@"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo "$@"
+	else
+		echo "Need root privileges." >&2
+		return 1
+	fi
+}
+
+load_app() {
+	if command -v tic80 >/dev/null 2>&1; then
+		return 0
+	fi
+	if ! command -v tce-load >/dev/null 2>&1; then
+		echo "tce-load is missing; cannot load tic80.tcz." >&2
+		return 1
+	fi
+	if [ -f /tce/optional/tic80.tcz ]; then
+		echo "Loading TIC-80..."
+		run_as_root tce-load -il /tce/optional/tic80.tcz
+	else
+		echo "tic80.tcz is not cached in /tce/optional." >&2
+		echo "Build it with 'make community-tcz' before assembling the image." >&2
+		return 1
+	fi
+	command -v tic80 >/dev/null 2>&1 || {
+		echo "TIC-80 did not become available after tce-load." >&2
+		return 1
+	}
+}
+
+record_for_slug() {
+	slug=$1
+	awk -F '	' -v slug="$slug" 'NF >= 4 && $1 !~ /^#/ && $1 == slug { print; found = 1; exit } END { exit found ? 0 : 1 }' "$MANIFEST"
+}
+
+slug_for_index() {
+	index=$1
+	awk -F '	' -v index="$index" 'NF >= 4 && $1 !~ /^#/ { count++; if (count == index) { print $1; found = 1; exit } } END { exit found ? 0 : 1 }' "$MANIFEST"
+}
+
+field() {
+	printf '%s\n' "$1" | cut -f "$2"
+}
+
+cart_path_for() {
+	record=$(record_for_slug "$1") || return 1
+	file=$(field "$record" 3)
+	printf '%s/%s\n' "$CART_DIR" "$file"
+}
+
+download_url() {
+	url=$1
+	dest=$2
+	tmp="$dest.tmp.$$"
+	rm -f "$tmp"
+	if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+		load_app
+	fi
+	if command -v curl >/dev/null 2>&1; then
+		curl -fL -o "$tmp" "$url"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -O "$tmp" "$url"
+	else
+		echo "Need curl or wget to download TIC-80 carts." >&2
+		return 1
+	fi
+	[ -s "$tmp" ] || {
+		rm -f "$tmp"
+		echo "Downloaded cart is empty." >&2
+		return 1
+	}
+	mv "$tmp" "$dest"
+}
+
+install_game() {
+	slug=$1
+	record=$(record_for_slug "$slug") || {
+		echo "Unknown TIC-80 game: $slug" >&2
+		return 1
+	}
+	title=$(field "$record" 2)
+	file=$(field "$record" 3)
+	url=$(field "$record" 4)
+	page=$(field "$record" 5)
+	mkdir -p "$CART_DIR"
+	dest="$CART_DIR/$file"
+	if [ -s "$dest" ]; then
+		echo "$title already installed."
+		return 0
+	fi
+	echo "Downloading $title"
+	echo "$page"
+	download_url "$url" "$dest"
+	echo "Installed $dest"
+}
+
+install_all() {
+	awk -F '	' 'NF >= 4 && $1 !~ /^#/ { print $1 }' "$MANIFEST" | while IFS= read -r slug; do
+		install_game "$slug"
+	done
+}
+
+list_games() {
+	awk -F '	' 'NF >= 4 && $1 !~ /^#/ { printf "%2d) %s\n", ++count, $2 }' "$MANIFEST"
+}
+
+play_game() {
+	slug=$1
+	load_app
+	install_game "$slug"
+	cart=$(cart_path_for "$slug")
+	DISPLAY="$DISPLAY" exec tic80 "$cart"
+}
+
+pause() {
+	echo
+	echo "Press enter to continue."
+	read _ || true
+}
+
+menu() {
+	while :; do
+		clear 2>/dev/null || true
+		echo "TIC-80 Games"
+		echo "============"
+		list_games
+		echo
+		echo "a) Install all"
+		echo "t) Open TIC-80"
+		echo "q) Quit"
+		printf '> '
+		read choice || exit 0
+		case "$choice" in
+			q|Q) exit 0 ;;
+			a|A) install_all; pause ;;
+			t|T) load_app; DISPLAY="$DISPLAY" tic80; pause ;;
+			''|*[!0-9]*) echo "Invalid selection"; pause ;;
+			*)
+				slug=$(slug_for_index "$choice") || {
+					echo "Invalid selection"
+					pause
+					continue
+				}
+				play_game "$slug"
+				;;
+		esac
+	done
+}
+
+case "${1:-menu}" in
+	run) load_app; DISPLAY="$DISPLAY" exec tic80 ;;
+	menu) menu ;;
+	list) list_games ;;
+	install) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-tic80 install GAME" >&2; exit 2; }; install_game "$1" ;;
+	install-all) install_all ;;
+	play) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-tic80 play GAME" >&2; exit 2; }; play_game "$1" ;;
+	*) echo "Usage: x-chip-tic80 [run|menu|list|install GAME|install-all|play GAME]" >&2; exit 2 ;;
+esac
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-goattracker" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+
+run_as_root() {
+	if [ "$(id -u)" = 0 ]; then
+		"$@"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo "$@"
+	else
+		echo "Need root privileges." >&2
+		return 1
+	fi
+}
+
+if ! command -v goattracker >/dev/null 2>&1; then
+	if ! command -v tce-load >/dev/null 2>&1; then
+		echo "tce-load is missing; cannot load goattracker.tcz." >&2
+		exit 1
+	fi
+	if [ -f /tce/optional/goattracker.tcz ]; then
+		echo "Loading GoatTracker..."
+		run_as_root tce-load -il /tce/optional/goattracker.tcz
+	else
+		echo "goattracker.tcz is not cached in /tce/optional." >&2
+		echo "Build it with 'make community-tcz' before assembling the image." >&2
+		exit 1
+	fi
+fi
+
+command -v goattracker >/dev/null 2>&1 || {
+	echo "GoatTracker did not become available after tce-load." >&2
+	exit 1
+}
+
+DISPLAY="$DISPLAY" exec goattracker "$@"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-mgba" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+HOME_DIR=${HOME:-/home/chip}
+ROM_DIR=${X_CHIP_MGBA_ROM_DIR:-$HOME_DIR/Games/GameBoy}
+
+run_as_root() {
+	if [ "$(id -u)" = 0 ]; then
+		"$@"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo "$@"
+	else
+		echo "Need root privileges." >&2
+		return 1
+	fi
+}
+
+find_mgba() {
+	if [ -n "${X_CHIP_MGBA_BIN:-}" ] && [ -x "$X_CHIP_MGBA_BIN" ]; then
+		printf '%s\n' "$X_CHIP_MGBA_BIN"
+		return 0
+	fi
+	if command -v mgba-sdl1 >/dev/null 2>&1; then
+		command -v mgba-sdl1
+		return 0
+	fi
+	command -v mgba 2>/dev/null || return 1
+}
+
+load_app() {
+	if find_mgba >/dev/null 2>&1; then
+		return 0
+	fi
+	if ! command -v tce-load >/dev/null 2>&1; then
+		echo "tce-load is missing; cannot load mgba.tcz." >&2
+		return 1
+	fi
+	if [ -f /tce/optional/mgba.tcz ]; then
+		echo "Loading mGBA..."
+		run_as_root tce-load -il /tce/optional/mgba.tcz
+	else
+		echo "mgba.tcz is not cached in /tce/optional." >&2
+		echo "Build it with './scripts/09-build-community-tcz.sh mgba' before assembling the image." >&2
+		return 1
+	fi
+	find_mgba >/dev/null 2>&1 || {
+		echo "mGBA did not become available after tce-load." >&2
+		return 1
+	}
+}
+
+list_roms() {
+	for dir in "$ROM_DIR" "$HOME_DIR/Downloads" "$HOME_DIR"; do
+		[ -d "$dir" ] || continue
+		find "$dir" -maxdepth 2 -type f \( \
+			-name '*.gb' -o -name '*.GB' -o \
+			-name '*.gbc' -o -name '*.GBC' -o \
+			-name '*.gba' -o -name '*.GBA' \) 2>/dev/null
+	done | awk '!seen[$0]++'
+}
+
+run_mgba() {
+	cmd=$(find_mgba) || {
+		echo "mGBA is not available." >&2
+		return 1
+	}
+	SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-x11}
+	SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}
+	export DISPLAY SDL_VIDEODRIVER SDL_AUDIODRIVER
+	exec "$cmd" -1 "$@"
+}
+
+play_file() {
+	file=$1
+	[ -f "$file" ] || {
+		echo "Not a file: $file" >&2
+		return 1
+	}
+	load_app
+	run_mgba "$file"
+}
+
+status() {
+	echo "mGBA"
+	echo "===="
+	if cmd=$(find_mgba); then
+		echo "binary: $cmd"
+	else
+		echo "binary: not loaded"
+	fi
+	[ -f /tce/optional/mgba.tcz ] && echo "mgba.tcz: cached" || echo "mgba.tcz: missing"
+	echo "ROM directory: $ROM_DIR"
+	count=$(list_roms | wc -l | awk '{print $1}')
+	echo "ROMs found: $count"
+	echo
+	echo "ROMs are not included. Put .gb, .gbc, or .gba files in:"
+	echo "$ROM_DIR"
+}
+
+case "${1:-menu}" in
+	status) status; exit 0 ;;
+	run) shift; if [ "$#" -gt 0 ]; then play_file "$1"; exit $?; fi ;;
+	play) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-mgba play ROM" >&2; exit 2; }; play_file "$1"; exit $? ;;
+esac
+
+if [ "$#" -gt 0 ] && [ "$1" != menu ]; then
+	play_file "$1"
+	exit $?
+fi
+
+mkdir -p "$ROM_DIR"
+tmp=/tmp/x-chip-mgba-roms.$$
+trap 'rm -f "$tmp"' EXIT
+list_roms >"$tmp"
+if [ ! -s "$tmp" ]; then
+	status
+	echo
+	printf 'ROM path, or q: '
+	read file || exit 0
+	case "$file" in q|Q|'') exit 0 ;; esac
+	play_file "$file"
+	exit $?
+fi
+
+echo "mGBA ROMs:"
+awk '{
+	name = $0
+	sub(".*/", "", name)
+	printf "%2d) %s\n    %s\n", NR, name, $0
+}' "$tmp"
+echo
+printf 'Play number, p for path, or q: '
+read choice || exit 0
+case "$choice" in
+	q|Q|'') exit 0 ;;
+	p|P)
+		printf 'ROM path: '
+		read file || exit 0
+		[ -n "$file" ] || exit 0
+		play_file "$file"
+		exit $?
+		;;
+	*[!0-9]*) echo "Invalid selection" >&2; exit 2 ;;
+esac
+file=$(sed -n "${choice}p" "$tmp")
+[ -n "$file" ] || {
+	echo "Invalid selection" >&2
+	exit 2
+}
+play_file "$file"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-pico8" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+HOME_DIR=${HOME:-/home/chip}
+WINDOW_ARGS="-windowed 1 -width 480 -height 272"
+
+find_pico8() {
+	if [ -n "${X_CHIP_PICO8_BIN:-}" ] && [ -x "$X_CHIP_PICO8_BIN" ]; then
+		printf '%s\n' "$X_CHIP_PICO8_BIN"
+		return 0
+	fi
+	for bin in \
+		"$HOME_DIR/pico-8/pico8" \
+		"$HOME_DIR/pico8/pico8" \
+		"/opt/pico-8/pico8" \
+		"/usr/local/bin/pico8"; do
+		[ -x "$bin" ] || continue
+		printf '%s\n' "$bin"
+		return 0
+	done
+	command -v pico8 2>/dev/null || return 1
+}
+
+missing() {
+	echo "PICO-8 is not bundled with this image."
+	echo
+	echo "Install your licensed Linux ARM PICO-8 files in one of:"
+	echo "  $HOME_DIR/pico-8/pico8"
+	echo "  $HOME_DIR/pico8/pico8"
+	echo "  /opt/pico-8/pico8"
+	echo
+	echo "Or set X_CHIP_PICO8_BIN to the pico8 executable."
+}
+
+status() {
+	echo "PICO-8"
+	echo "======"
+	if bin=$(find_pico8); then
+		echo "binary: $bin"
+	else
+		echo "binary: missing"
+	fi
+	echo "mode: windowed 480x272"
+}
+
+run_pico8() {
+	bin=$(find_pico8) || {
+		missing >&2
+		return 1
+	}
+	export DISPLAY
+	# shellcheck disable=SC2086
+	exec "$bin" $WINDOW_ARGS "$@"
+}
+
+menu() {
+	while :; do
+		clear 2>/dev/null || true
+		status
+		echo
+		echo "1) Splore"
+		echo "2) Run cart path"
+		echo "q) Quit"
+		printf '> '
+		read choice || exit 0
+		case "$choice" in
+			q|Q|'') exit 0 ;;
+			1) run_pico8 -splore ;;
+			2)
+				printf 'Cart path: '
+				read cart || exit 0
+				[ -n "$cart" ] || continue
+				run_pico8 "$cart"
+				;;
+			*) echo "Invalid selection"; sleep 1 ;;
+		esac
+	done
+}
+
+case "${1:-menu}" in
+	status) status ;;
+	run|splore) run_pico8 -splore ;;
+	play) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-pico8 play CART" >&2; exit 2; }; run_pico8 "$1" ;;
+	menu) menu ;;
+	*) echo "Usage: x-chip-pico8 [menu|status|run|splore|play CART]" >&2; exit 2 ;;
+esac
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-games" <<'EOF'
+#!/bin/sh
+set -eu
+
+pause() {
+	echo
+	echo "Press enter to continue."
+	read _ || true
+}
+
+status() {
+	echo "Game Launchers"
+	echo "=============="
+	echo
+	x-chip-mgba status || true
+	echo
+	x-chip-doom status || true
+	echo
+	x-chip-pico8 status || true
+	echo
+	command -v tic80 >/dev/null 2>&1 && echo "TIC-80: loaded" || echo "TIC-80: lazy-load"
+	command -v goattracker >/dev/null 2>&1 && echo "GoatTracker: loaded" || echo "GoatTracker: lazy-load"
+}
+
+menu() {
+	while :; do
+		clear 2>/dev/null || true
+		echo "Games"
+		echo "====="
+		echo "1) Game Boy / Game Boy Advance"
+		echo "2) Doom"
+		echo "3) TIC-80"
+		echo "4) PICO-8"
+		echo "5) GoatTracker"
+		echo "s) Status"
+		echo "q) Quit"
+		printf '> '
+		read choice || exit 0
+		case "$choice" in
+			q|Q|'') exit 0 ;;
+			1) x-chip-mgba menu; pause ;;
+			2) x-chip-doom run; pause ;;
+			3) x-chip-tic80 menu; pause ;;
+			4) x-chip-pico8 menu; pause ;;
+			5) x-chip-goattracker; pause ;;
+			s|S) status; pause ;;
+			*) echo "Invalid selection"; sleep 1 ;;
+		esac
+	done
+}
+
+case "${1:-menu}" in
+	menu) menu ;;
+	status) status ;;
+	gameboy|gb|gba) exec x-chip-mgba menu ;;
+	doom) exec x-chip-doom run ;;
+	tic80|tic-80|tic) exec x-chip-tic80 menu ;;
+	pico8|pico-8|pico) exec x-chip-pico8 menu ;;
+	goattracker|goat) exec x-chip-goattracker ;;
+	*) echo "Usage: x-chip-games [menu|status|gameboy|doom|tic80|pico8|goattracker]" >&2; exit 2 ;;
+esac
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-doom" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+HOME=${HOME:-/home/chip}
+IWAD=${X_CHIP_DOOM_IWAD:-/usr/local/share/doom/freedoom1.wad}
+
+run_as_root() {
+	if [ "$(id -u)" = 0 ]; then
+		"$@"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo "$@"
+	else
+		echo "Need root privileges." >&2
+		return 1
+	fi
+}
+
+load_app() {
+	if command -v chocolate-doom >/dev/null 2>&1; then
+		return 0
+	fi
+	if ! command -v tce-load >/dev/null 2>&1; then
+		echo "tce-load is missing; cannot load doom.tcz." >&2
+		return 1
+	fi
+	if [ -f /tce/optional/doom.tcz ]; then
+		echo "Loading Doom..."
+		run_as_root tce-load -il /tce/optional/doom.tcz
+	else
+		echo "doom.tcz is not cached in /tce/optional." >&2
+		echo "Build it with './scripts/09-build-community-tcz.sh doom' before assembling the image." >&2
+		return 1
+	fi
+	command -v chocolate-doom >/dev/null 2>&1 || {
+		echo "Chocolate Doom did not become available after tce-load." >&2
+		return 1
+	}
+}
+
+status() {
+	echo "Doom"
+	echo "===="
+	command -v chocolate-doom >/dev/null 2>&1 && echo "chocolate-doom: installed" || echo "chocolate-doom: not loaded"
+	[ -f /tce/optional/doom.tcz ] && echo "doom.tcz: cached" || echo "doom.tcz: missing"
+	[ -f "$IWAD" ] && echo "IWAD: $IWAD" || echo "IWAD missing: $IWAD"
+}
+
+run_game() {
+	load_app
+	[ -f "$IWAD" ] || {
+		echo "Missing Doom IWAD: $IWAD" >&2
+		return 1
+	}
+	SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-x11}
+	export DISPLAY HOME SDL_VIDEODRIVER
+	if [ "${X_CHIP_DOOM_SOUND:-0}" = 1 ]; then
+		exec chocolate-doom -iwad "$IWAD" -window -geometry 480x272 "$@"
+	fi
+	SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}
+	export SDL_AUDIODRIVER
+	exec chocolate-doom -iwad "$IWAD" -window -geometry 480x272 -nosound -nomusic "$@"
+}
+
+case "${1:-run}" in
+	status) status ;;
+	run) shift; run_game "$@" ;;
+	*) run_game "$@" ;;
+esac
 EOF
 
     install_text 0755 "$RFS/usr/local/bin/x-chip-desktop-stats" <<'EOF'
@@ -2063,9 +2842,47 @@ EOF
 install_media_tools() {
     need_root install -d "$RFS/usr/local/bin"
     need_root install -d "$RFS/home/$SSH_USER/Pictures" "$RFS/home/$SSH_USER/Videos" \
-        "$RFS/home/$SSH_USER/Music" "$RFS/home/$SSH_USER/Downloads"
+        "$RFS/home/$SSH_USER/Music" "$RFS/home/$SSH_USER/Downloads" \
+        "$RFS/home/$SSH_USER/Games/GameBoy"
+    need_root install -m 0644 config/sample-media/Pictures/red-hood-field.jpeg \
+        "$RFS/home/$SSH_USER/Pictures/red-hood-field.jpeg"
+    need_root install -m 0644 config/sample-media/Videos/night-lamp-dream.mp4 \
+        "$RFS/home/$SSH_USER/Videos/night-lamp-dream.mp4"
+    need_root install -m 0644 config/sample-media/Music/dreamscape-sample.mp3 \
+        "$RFS/home/$SSH_USER/Music/dreamscape-sample.mp3"
+    if [ "${INCLUDE_PRIVATE_ROMS:-0}" = 1 ]; then
+        if [ "${PUBLIC_IMAGE:-0}" = 1 ]; then
+            echo "ERROR: INCLUDE_PRIVATE_ROMS=1 is not allowed with PUBLIC_IMAGE=1" >&2
+            exit 1
+        fi
+        local private_roms_dir
+        private_roms_dir=$(resolve_path "${PRIVATE_ROMS_DIR:-dist/private-roms/GameBoy}")
+        [ -d "$private_roms_dir" ] || {
+            echo "ERROR: private ROM directory does not exist: $private_roms_dir" >&2
+            exit 1
+        }
+        local copied_roms=0 rom
+        while IFS= read -r rom; do
+            need_root install -m 0644 "$rom" "$RFS/home/$SSH_USER/Games/GameBoy/${rom##*/}"
+            copied_roms=$((copied_roms + 1))
+        done < <(find "$private_roms_dir" -maxdepth 1 -type f \( \
+            -iname '*.gb' -o -iname '*.gbc' -o -iname '*.gba' \) | sort)
+        [ "$copied_roms" -gt 0 ] || {
+            echo "ERROR: INCLUDE_PRIVATE_ROMS=1 but no .gb/.gbc/.gba files were found in $private_roms_dir" >&2
+            exit 1
+        }
+        echo ">> copied $copied_roms private Game Boy ROM(s)"
+    fi
     need_root chown "$SSH_UID:$SSH_GID" "$RFS/home/$SSH_USER/Pictures" "$RFS/home/$SSH_USER/Videos" \
-        "$RFS/home/$SSH_USER/Music" "$RFS/home/$SSH_USER/Downloads"
+        "$RFS/home/$SSH_USER/Music" "$RFS/home/$SSH_USER/Downloads" \
+        "$RFS/home/$SSH_USER/Games" "$RFS/home/$SSH_USER/Games/GameBoy"
+    need_root chown "$SSH_UID:$SSH_GID" \
+        "$RFS/home/$SSH_USER/Pictures/red-hood-field.jpeg" \
+        "$RFS/home/$SSH_USER/Videos/night-lamp-dream.mp4" \
+        "$RFS/home/$SSH_USER/Music/dreamscape-sample.mp3"
+    if [ "${INCLUDE_PRIVATE_ROMS:-0}" = 1 ]; then
+        need_root chown "$SSH_UID:$SSH_GID" "$RFS/home/$SSH_USER/Games/GameBoy"/* 2>/dev/null || true
+    fi
     install_text 0755 "$RFS/usr/local/bin/x-chip-media-on" <<'EOF'
 #!/bin/sh
 set -eu
@@ -2133,6 +2950,8 @@ EOF
 
 install_xorg_desktop_tools() {
     need_root install -d "$RFS/usr/local/bin" \
+        "$RFS/usr/local/etc/mc" \
+        "$RFS/usr/local/share/applications" \
         "$RFS/usr/local/etc/X11/xorg.conf.d" \
         "$RFS/etc/X11/xorg.conf.d" \
         "$RFS/usr/local/share/x-chip/xorg" \
@@ -2236,21 +3055,31 @@ install_user_desktop_config() {
 	mkdir -p "$home"
 	cp /usr/local/share/x-chip/xorg/jwmrc "$home/.jwmrc"
 	mkdir -p "$home/.config/geany" "$home/.config/leafpad" \
-		"$home/.config/pcmanfm/default" "$home/.config/gtk-3.0" "$home/.dillo"
+		"$home/.config/pcmanfm/default" "$home/.config/gtk-3.0" "$home/.config/mc" \
+		"$home/.local/share/applications" "$home/.dillo"
 	[ -f "$home/.config/geany/geany.conf" ] || \
 		cp /usr/local/share/x-chip/xorg/geany.conf "$home/.config/geany/geany.conf"
 	[ -f "$home/.config/leafpad/leafpadrc" ] || \
 		cp /usr/local/share/x-chip/xorg/leafpadrc "$home/.config/leafpad/leafpadrc"
 	[ -f "$home/.config/pcmanfm/default/pcmanfm.conf" ] || \
 		cp /usr/local/share/x-chip/xorg/pcmanfm.conf "$home/.config/pcmanfm/default/pcmanfm.conf"
+	[ -f "$home/.config/mc/ini" ] || \
+		cp /usr/local/share/x-chip/xorg/mc.ini "$home/.config/mc/ini"
+	[ -f "$home/.config/mimeapps.list" ] || \
+		cp /usr/local/share/applications/mimeapps.list "$home/.config/mimeapps.list"
+	[ -f "$home/.local/share/applications/mimeapps.list" ] || \
+		cp /usr/local/share/applications/mimeapps.list "$home/.local/share/applications/mimeapps.list"
+	cp /usr/local/share/applications/x-chip-*.desktop "$home/.local/share/applications/" 2>/dev/null || true
 	[ -f "$home/.dillo/dillorc" ] || \
 		cp /usr/local/share/x-chip/xorg/dillorc "$home/.dillo/dillorc"
 	[ -f "$home/.gtkrc-2.0" ] || \
 		cp /usr/local/share/x-chip/xorg/gtkrc-2.0 "$home/.gtkrc-2.0"
+	[ -f "$home/.Xdefaults" ] || \
+		cp /usr/local/share/x-chip/xorg/Xdefaults "$home/.Xdefaults"
 	[ -f "$home/.config/gtk-3.0/settings.ini" ] || \
 		cp /usr/local/share/x-chip/xorg/gtk3-settings.ini "$home/.config/gtk-3.0/settings.ini"
 	if id "$TC_USER" >/dev/null 2>&1; then
-		chown -R "$TC_USER":"$TC_USER" "$home/.jwmrc" "$home/.config" "$home/.dillo" "$home/.gtkrc-2.0" 2>/dev/null || true
+		chown -R "$TC_USER":"$TC_USER" "$home/.jwmrc" "$home/.config" "$home/.local" "$home/.dillo" "$home/.gtkrc-2.0" "$home/.Xdefaults" 2>/dev/null || true
 	fi
 }
 
@@ -2531,7 +3360,7 @@ draw_window_target() {
 	[ "$top" -gt "$max_top" ] && top=$max_top
 	kill "$target_pid" 2>/dev/null || true
 	geom="${TARGET_COLS}x${TARGET_ROWS}+${left}+${top}"
-	aterm -bg white -fg black -geometry "$geom" -title "$label" \
+	aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry "$geom" -title "$label" \
 		-e sh -c 'printf "\n   X\n  TAP\n"; sleep "$1"' sh "$TAP_TIMEOUT" \
 		>/tmp/x-chip-calibration-target.log 2>&1 &
 	target_pid=$!
@@ -2793,6 +3622,9 @@ X_CHIP_WM=${X_CHIP_WM:-jwm}
 
 x-chip-x-apply-calibration >/tmp/x-chip-x-calibration.log 2>&1 || true
 xset -dpms s off 2>/dev/null || true
+if [ -f "$HOME/.Xdefaults" ] && command -v xrdb >/dev/null 2>&1; then
+	xrdb -merge "$HOME/.Xdefaults" >/tmp/xrdb.log 2>&1 || true
+fi
 
 if [ ! -f "$HOME/.jwmrc" ] && [ -f /usr/local/share/x-chip/xorg/jwmrc ]; then
 	cp /usr/local/share/x-chip/xorg/jwmrc "$HOME/.jwmrc"
@@ -2920,6 +3752,22 @@ EOF
         "$RFS/usr/local/share/x-chip/xorg/touchscreen-calibration.matrix"
     need_root install -m 0644 config/wallpapers/pocket-core.png \
         "$RFS/usr/local/share/x-chip/xorg/wallpapers/pocket-core.png"
+    need_root install -d "$RFS/usr/local/share/mc/skins"
+    for skin in config/mc-skins/*.ini; do
+        [ -f "$skin" ] || continue
+        need_root install -m 0644 "$skin" "$RFS/usr/local/share/mc/skins/${skin##*/}"
+    done
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/mc.ini" <<'EOF'
+[Midnight-Commander]
+skin=electricblue256
+
+[Layout]
+command_prompt=0
+keybar_visible=0
+message_visible=0
+xterm_title=0
+free_space=0
+EOF
 
     need_root install -d "$RFS/usr/local/share/x-chip/xorg/icons"
     for icon in config/xorg-icons/*.xpm; do
@@ -3032,56 +3880,82 @@ EOF
 
   <RootMenu onroot="3">
     <Menu label="Apps" icon="apps.xpm">
-      <Program label="Terminal" icon="terminal.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Terminal</Program>
+      <Program label="Terminal" icon="terminal.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Terminal</Program>
       <Program label="Files" icon="files.xpm">pcmanfm</Program>
       <Program label="Browser" icon="browser.xpm">dillo -g 474x212+0+0</Program>
       <Program label="Editor" icon="editor.xpm">leafpad</Program>
       <Program label="Code" icon="code.xpm">geany -s -m -p -t</Program>
-      <Program label="Calculator" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Calculator -e x-chip-calc</Program>
-      <Program label="Images" icon="image.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Images -e x-chip-open-image</Program>
-      <Program label="Music" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Music -e x-chip-music</Program>
-      <Program label="Video" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Video -e x-chip-video</Program>
+      <Program label="Calculator" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Calculator -e x-chip-calc</Program>
+      <Program label="Images" icon="image.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Images -e x-chip-open-image</Program>
+      <Program label="Music" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Music -e x-chip-music</Program>
+      <Program label="Video" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Video -e x-chip-video</Program>
       <Separator/>
-      <Program label="Links" icon="browser.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Links -e links</Program>
-      <Program label="Nano" icon="editor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Nano -e nano</Program>
-      <Program label="Midnight Commander" icon="files.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Files -e mc</Program>
+      <Program label="Links" icon="browser.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Links -e links</Program>
+      <Program label="Nano" icon="editor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Nano -e nano</Program>
+      <Program label="Midnight Commander" icon="files.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Files -e x-chip-mc</Program>
+    </Menu>
+    <Menu label="Games" icon="apps.xpm">
+      <Program label="Game Launcher" icon="apps.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Games -e x-chip-games</Program>
+      <Separator/>
+      <Program label="Doom" icon="pocket.xpm">x-chip-doom run</Program>
+      <Program label="Game Boy Launcher" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title GameBoy -e x-chip-mgba</Program>
+      <Program label="Game Boy Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title mGBA -e x-chip-term-hold x-chip-mgba status</Program>
+      <Program label="PICO-8" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title PICO-8 -e x-chip-pico8 menu</Program>
+      <Program label="TIC-80" icon="pocket.xpm">x-chip-tic80 run</Program>
+      <Program label="TIC-80 Manager" icon="apps.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 menu</Program>
+      <Program label="Install All TIC-80 Games" icon="network.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 install-all</Program>
+      <Menu label="TIC-80 Games" icon="pocket.xpm">
+        <Program label="8 Bit Panda" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play 8-bit-panda</Program>
+        <Program label="Stele" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play stele</Program>
+        <Program label="Balmung" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play balmung</Program>
+        <Program label="Supernova" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play supernova</Program>
+        <Program label="Turns of War" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play turns-of-war</Program>
+        <Program label="Cauliflower Power" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play cauliflower-power</Program>
+        <Program label="Minetic" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play minetic</Program>
+        <Program label="Powder Game" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play powder-game</Program>
+        <Program label="Secret Agents" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play secret-agents</Program>
+        <Program label="Komet" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play komet</Program>
+        <Program label="The Sky House" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play the-sky-house</Program>
+        <Program label="TIC-Sweeper" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play tic-sweeper</Program>
+      </Menu>
+      <Program label="GoatTracker" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title GoatTracker -e x-chip-goattracker</Program>
     </Menu>
     <Menu label="Network" icon="network.xpm">
-      <Program label="WiFi Setup" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu</Program>
-      <Program label="WiFi Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu status</Program>
-      <Program label="WiFi Interfaces" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu interfaces</Program>
-      <Program label="External Scan" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Scan -e x-chip-term-hold x-chip-wifi-menu scan-external</Program>
+      <Program label="WiFi Setup" icon="network.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu</Program>
+      <Program label="WiFi Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu status</Program>
+      <Program label="WiFi Interfaces" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu interfaces</Program>
+      <Program label="External Scan" icon="network.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Scan -e x-chip-term-hold x-chip-wifi-menu scan-external</Program>
     </Menu>
     <Menu label="Brightness" icon="brightness.xpm">
-      <Program label="Control" icon="brightness.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Brightness -e x-chip-brightness menu</Program>
+      <Program label="Control" icon="brightness.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Brightness -e x-chip-brightness menu</Program>
       <Program label="Brighter" icon="brightness.xpm">x-chip-brightness up</Program>
       <Program label="Dim" icon="brightness.xpm">x-chip-brightness down</Program>
       <Program label="Restore Default" icon="brightness.xpm">x-chip-brightness set 6</Program>
     </Menu>
     <Menu label="Pocket" icon="pocket.xpm">
-      <Program label="Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x15+0+0 -title Status -e x-chip-status</Program>
+      <Program label="Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x15+0+0 -title Status -e x-chip-status</Program>
       <Menu label="Time" icon="pocket.xpm">
-        <Program label="Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time status</Program>
-        <Program label="Sync Internet Time" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time sync</Program>
-        <Program label="Set Date/Time" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Time -e x-chip-time set</Program>
+        <Program label="Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time status</Program>
+        <Program label="Sync Internet Time" icon="network.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time sync</Program>
+        <Program label="Set Date/Time" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Time -e x-chip-time set</Program>
       </Menu>
       <Menu label="Desktop Stats" icon="monitor.xpm">
         <Program label="On" icon="monitor.xpm">x-chip-desktop-stats on</Program>
         <Program label="Off" icon="close.xpm">x-chip-desktop-stats off</Program>
-        <Program label="Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Stats -e x-chip-term-hold x-chip-desktop-stats status</Program>
+        <Program label="Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Stats -e x-chip-term-hold x-chip-desktop-stats status</Program>
       </Menu>
-      <Program label="Audio Mixer" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Audio -e alsamixer</Program>
-      <Program label="Power" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Power -e x-chip-term-hold x-chip-power-status</Program>
-      <Program label="Keyboard" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Keyboard -e x-chip-term-hold x-chip-keyboard-status</Program>
-      <Program label="Audio Status" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Audio -e x-chip-term-hold x-chip-audio-status</Program>
-      <Program label="Logs" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -geometry 58x14+0+0 -title Logs -e x-chip-logs</Program>
+      <Program label="Audio Mixer" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Audio -e alsamixer</Program>
+      <Program label="Power" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Power -e x-chip-term-hold x-chip-power-status</Program>
+      <Program label="Keyboard" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Keyboard -e x-chip-term-hold x-chip-keyboard-status</Program>
+      <Program label="Audio Status" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Audio -e x-chip-term-hold x-chip-audio-status</Program>
+      <Program label="Logs" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Logs -e x-chip-logs</Program>
     </Menu>
     <Menu label="Touch" icon="touch.xpm">
       <Program label="Apply Calibration" icon="touch.xpm">x-chip-x-apply-calibration</Program>
       <Program label="Calibrate" icon="touch.xpm">x-chip-touch-calibrate</Program>
     </Menu>
     <Menu label="Window" icon="window.xpm">
-      <Program label="Monitor" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Monitor -e htop</Program>
+      <Program label="Monitor" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Monitor -e htop</Program>
       <Program label="Close Apps" icon="close.xpm">x-chip-close-app all</Program>
       <Restart label="Restart UI" icon="window.xpm"/>
     </Menu>
@@ -3090,11 +3964,13 @@ EOF
   <Tray x="0" y="-1" width="480" height="32" autohide="off">
     <TrayButton label="Menu" icon="menu.xpm" popup="Open menu">root:3</TrayButton>
     <Spacer width="4"/>
-    <TrayButton label="Term" icon="terminal.xpm" popup="Terminal">exec:aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#4FD1C5' -geometry 58x14+0+0 -title Terminal</TrayButton>
+    <TrayButton label="Term" icon="terminal.xpm" popup="Terminal">exec:aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Terminal</TrayButton>
     <Spacer width="4"/>
     <TrayButton label="Files" icon="files.xpm" popup="Files">exec:pcmanfm</TrayButton>
     <Spacer width="6"/>
-    <TaskList maxwidth="260"/>
+    <TrayButton label="Play" icon="pocket.xpm" popup="Games">exec:aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Games -e x-chip-games</TrayButton>
+    <Spacer width="6"/>
+    <TaskList maxwidth="160"/>
     <Clock format="%H:%M"/>
   </Tray>
 
@@ -3103,45 +3979,45 @@ EOF
     <Width>2</Width>
     <Height>18</Height>
     <Corner>0</Corner>
-    <Foreground>#EAF2EF</Foreground>
-    <Background>#354240</Background>
-    <Outline>#0F1716</Outline>
+    <Foreground>#e4e4e4</Foreground>
+    <Background>#444444</Background>
+    <Outline>#585858</Outline>
     <Active>
-      <Foreground>#FFFFFF</Foreground>
-      <Background>#1F7A66</Background>
+      <Foreground>#262626</Foreground>
+      <Background>#00afff</Background>
     </Active>
   </WindowStyle>
 
   <TrayStyle decorations="motif">
     <Font>Sans-9</Font>
-    <Background>#E7ECEA</Background>
-    <Foreground>#0F1716</Foreground>
+    <Background>#262626</Background>
+    <Foreground>#e4e4e4</Foreground>
   </TrayStyle>
 
   <TaskListStyle list="all" group="true">
     <Font>Sans-9</Font>
-    <Foreground>#0F1716</Foreground>
-    <Background>#D4DDD9</Background>
+    <Foreground>#e4e4e4</Foreground>
+    <Background>#444444</Background>
     <Active>
-      <Foreground>#FFFFFF</Foreground>
-      <Background>#1F7A66</Background>
+      <Foreground>#262626</Foreground>
+      <Background>#00afff</Background>
     </Active>
   </TaskListStyle>
 
   <MenuStyle decorations="motif">
     <Font>Sans-9</Font>
-    <Foreground>#0F1716</Foreground>
-    <Background>#F5F7F6</Background>
+    <Foreground>#e4e4e4</Foreground>
+    <Background>#262626</Background>
     <Active>
-      <Foreground>#FFFFFF</Foreground>
-      <Background>#1F7A66</Background>
+      <Foreground>#262626</Foreground>
+      <Background>#00afff</Background>
     </Active>
   </MenuStyle>
 
   <PopupStyle>
     <Font>Sans-9</Font>
-    <Foreground>#0F1716</Foreground>
-    <Background>#E7ECEA</Background>
+    <Foreground>#e4e4e4</Foreground>
+    <Background>#444444</Background>
   </PopupStyle>
 
   <Desktops width="1" height="1">
@@ -3187,7 +4063,7 @@ load_plugins=false
 load_vte=false
 
 [tools]
-terminal_cmd=aterm -e "/bin/sh %c"
+terminal_cmd=aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -e "/bin/sh %c"
 browser_cmd=dillo
 grep_cmd=grep
 
@@ -3264,6 +4140,153 @@ gtk-font-name = "Sans 9"
 gtk-icon-theme-name = "x-chip"
 gtk-toolbar-style = GTK_TOOLBAR_ICONS
 gtk-icon-sizes = "gtk-small-toolbar=16,16:gtk-large-toolbar=16,16:gtk-button=16,16:gtk-menu=16,16"
+
+style "electricblue"
+{
+  bg[NORMAL] = "#262626"
+  fg[NORMAL] = "#e4e4e4"
+  base[NORMAL] = "#585858"
+  text[NORMAL] = "#e4e4e4"
+  bg[ACTIVE] = "#444444"
+  fg[ACTIVE] = "#e4e4e4"
+  bg[PRELIGHT] = "#00afff"
+  fg[PRELIGHT] = "#262626"
+  bg[SELECTED] = "#00afff"
+  fg[SELECTED] = "#262626"
+  bg[INSENSITIVE] = "#444444"
+  fg[INSENSITIVE] = "#949494"
+}
+class "*" style "electricblue"
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/Xdefaults" <<'EOF'
+Aterm*transparent: false
+Aterm*shading: 0
+Aterm*background: #262626
+Aterm*foreground: #e4e4e4
+Aterm*cursorColor: #00afff
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/applications/x-chip-image.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=X-CHIP Image Viewer
+Exec=x-chip-open-image %f
+Terminal=false
+MimeType=image/png;image/jpeg;image/gif;image/webp;image/x-xpixmap;
+NoDisplay=true
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/applications/x-chip-video.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=X-CHIP Video Player
+Exec=x-chip-video play %f
+Terminal=false
+MimeType=video/mp4;video/x-m4v;video/x-msvideo;video/quicktime;video/x-matroska;video/webm;video/mpeg;
+NoDisplay=true
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/applications/x-chip-music.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=X-CHIP Music Player
+Exec=x-chip-music play-bg %f
+Terminal=false
+MimeType=audio/mpeg;audio/mp3;
+NoDisplay=true
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/applications/x-chip-pdf.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=X-CHIP PDF Viewer
+Exec=x-chip-open-pdf %f
+Terminal=false
+MimeType=application/pdf;
+NoDisplay=true
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/applications/x-chip-text.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=X-CHIP Text Editor
+Exec=leafpad %f
+Terminal=false
+MimeType=text/plain;text/markdown;application/x-shellscript;
+NoDisplay=true
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/applications/mimeapps.list" <<'EOF'
+[Default Applications]
+image/png=x-chip-image.desktop
+image/jpeg=x-chip-image.desktop
+image/gif=x-chip-image.desktop
+image/webp=x-chip-image.desktop
+image/x-xpixmap=x-chip-image.desktop
+video/mp4=x-chip-video.desktop
+video/x-m4v=x-chip-video.desktop
+video/x-msvideo=x-chip-video.desktop
+video/quicktime=x-chip-video.desktop
+video/x-matroska=x-chip-video.desktop
+video/webm=x-chip-video.desktop
+video/mpeg=x-chip-video.desktop
+audio/mpeg=x-chip-music.desktop
+audio/mp3=x-chip-music.desktop
+application/pdf=x-chip-pdf.desktop
+text/plain=x-chip-text.desktop
+text/markdown=x-chip-text.desktop
+application/x-shellscript=x-chip-text.desktop
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/applications/mimeinfo.cache" <<'EOF'
+[MIME Cache]
+image/png=x-chip-image.desktop;
+image/jpeg=x-chip-image.desktop;
+image/gif=x-chip-image.desktop;
+image/webp=x-chip-image.desktop;
+image/x-xpixmap=x-chip-image.desktop;
+video/mp4=x-chip-video.desktop;
+video/x-m4v=x-chip-video.desktop;
+video/x-msvideo=x-chip-video.desktop;
+video/quicktime=x-chip-video.desktop;
+video/x-matroska=x-chip-video.desktop;
+video/webm=x-chip-video.desktop;
+video/mpeg=x-chip-video.desktop;
+audio/mpeg=x-chip-music.desktop;
+audio/mp3=x-chip-music.desktop;
+application/pdf=x-chip-pdf.desktop;
+text/plain=x-chip-text.desktop;
+text/markdown=x-chip-text.desktop;
+application/x-shellscript=x-chip-text.desktop;
+EOF
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/mc-media.ext.ini" <<'EOF'
+### x-chip media handlers ###
+
+[x-chip images]
+Regex=\.(png|jpe?g|gif|webp|xpm)$
+RegexIgnoreCase=true
+Open=sh -c 'x-chip-open-image "$MC_EXT_FILENAME"'
+View=sh -c 'x-chip-open-image "$MC_EXT_FILENAME"'
+
+[x-chip videos]
+Regex=\.(mp4|m4v|avi|mov|mkv|webm|mpg|mpeg)$
+RegexIgnoreCase=true
+Open=sh -c 'x-chip-video play "$MC_EXT_FILENAME"'
+View=sh -c 'x-chip-video play "$MC_EXT_FILENAME"'
+
+[x-chip music]
+Regex=\.(mp3)$
+RegexIgnoreCase=true
+Open=sh -c 'x-chip-music play "$MC_EXT_FILENAME"'
+View=sh -c 'x-chip-music play "$MC_EXT_FILENAME"'
+
+[x-chip pdf]
+Regex=\.(pdf)$
+RegexIgnoreCase=true
+Open=sh -c 'x-chip-open-pdf "$MC_EXT_FILENAME"'
+View=sh -c 'x-chip-open-pdf "$MC_EXT_FILENAME"'
 EOF
 
     install_text 0644 "$RFS/usr/local/share/x-chip/xorg/gtk3-settings.ini" <<'EOF'
@@ -3271,6 +4294,7 @@ EOF
 gtk-font-name = Sans 9
 gtk-icon-theme-name = x-chip
 gtk-theme-name = Adwaita
+gtk-application-prefer-dark-theme = false
 gtk-cursor-theme-name = Adwaita
 EOF
 
@@ -3425,6 +4449,37 @@ preseed_tcz_extensions() {
     need_root install -d "$optional"
     declare -A seen=()
 
+    copy_community_tcz_extensions() {
+        local mode=${INCLUDE_COMMUNITY_TCZ:-auto}
+        local src=${COMMUNITY_TCZ_DIR:-$HERE/dist/community-tcz}
+        local app file copied=0
+        [ "$mode" != 0 ] || return 0
+        if [ ! -d "$src" ]; then
+            [ "$mode" = 1 ] && {
+                echo "ERROR: INCLUDE_COMMUNITY_TCZ=1 but $src does not exist" >&2
+                echo "Run 'make community-tcz' before building the rootfs." >&2
+                exit 1
+            }
+            return 0
+        fi
+        for app in tic80 goattracker mgba doom; do
+            if [ ! -s "$src/$app.tcz" ]; then
+                [ "$mode" = 1 ] && {
+                    echo "ERROR: missing $src/$app.tcz" >&2
+                    exit 1
+                }
+                continue
+            fi
+            echo ">> copy community extension $app.tcz"
+            for file in "$app.tcz" "$app.tcz.dep" "$app.tcz.info" "$app.tcz.list" "$app.tcz.md5.txt"; do
+                [ -e "$src/$file" ] || continue
+                need_root install -m644 "$src/$file" "$optional/$file"
+            done
+            copied=1
+        done
+        [ "$copied" = 1 ] && echo ">> community extensions cached for click-to-load use"
+    }
+
     download_optional() {
         local url=$1 dest=$2 tmp
         [ -s "$dest" ] && return 0
@@ -3487,6 +4542,8 @@ preseed_tcz_extensions() {
         fi
     }
 
+    copy_community_tcz_extensions
+
     while IFS= read -r ext; do
         download_tcz "$ext"
     done < tce/onboot.lst
@@ -3502,6 +4559,13 @@ preseed_tcz_extensions() {
             download_tcz "$ext"
         done < tce/xorg.lst
     fi
+
+    for depfile in "$optional/tic80.tcz.dep" "$optional/goattracker.tcz.dep" "$optional/mgba.tcz.dep" "$optional/doom.tcz.dep"; do
+        [ -s "$depfile" ] || continue
+        while IFS= read -r ext; do
+            download_tcz "$ext"
+        done < "$depfile"
+    done
 
     need_root chown -R 0:0 "$RFS/tce"
 }
@@ -3847,9 +4911,11 @@ load_audio_modules() {
 		amixer set Speaker 80% >/dev/null 2>&1 || true
 		amixer set PCM 80% >/dev/null 2>&1 || true
 		amixer set 'Power Amplifier Mute' off >/dev/null 2>&1 || true
-		amixer set 'Power Amplifier Mixer' off >/dev/null 2>&1 || true
+		amixer set 'Power Amplifier Mixer' on >/dev/null 2>&1 || true
 		amixer set 'Power Amplifier DAC' on >/dev/null 2>&1 || true
 		amixer set 'Power Amplifier' 80% >/dev/null 2>&1 || true
+		amixer set 'Left Mixer Left DAC' on >/dev/null 2>&1 || true
+		amixer set 'Right Mixer Right DAC' on >/dev/null 2>&1 || true
 	fi
 }
 
@@ -4063,9 +5129,18 @@ EOF
         "usr/local/bin/x-chip-status" \
         "usr/local/bin/x-chip-calc" \
         "usr/local/bin/x-chip-time" \
+        "usr/local/bin/x-chip-open" \
         "usr/local/bin/x-chip-open-image" \
+        "usr/local/bin/x-chip-open-pdf" \
         "usr/local/bin/x-chip-music" \
         "usr/local/bin/x-chip-video" \
+        "usr/local/bin/xdg-open" \
+        "usr/local/bin/x-chip-tic80" \
+        "usr/local/bin/x-chip-goattracker" \
+        "usr/local/bin/x-chip-mgba" \
+        "usr/local/bin/x-chip-pico8" \
+        "usr/local/bin/x-chip-games" \
+        "usr/local/bin/x-chip-doom" \
         "usr/local/bin/x-chip-desktop-stats" \
         "usr/local/bin/x-chip-logs" \
         "usr/local/bin/x-chip-brightness" \
@@ -4081,6 +5156,8 @@ EOF
         "usr/local/etc/X11/xorg.conf.d" \
         "etc/X11/xorg.conf.d" \
         "usr/local/share/x-chip/xorg" \
+        "usr/local/share/applications" \
+        "usr/local/share/x-chip/tic80-carts.tsv" \
         "usr/local/share/x-chip/xorg/touchscreen-calibration.matrix" \
         "usr/local/sbin/x-chip-rtl8812au-hotplug" \
         "opt/x-chip-firstboot.sh" \
@@ -4149,12 +5226,22 @@ for required in \
     ./usr/local/bin/x-chip-audio-status \
     ./usr/local/bin/x-chip-power-status \
     ./usr/local/bin/x-chip-term-hold \
+    ./usr/local/bin/x-chip-mc \
     ./usr/local/bin/x-chip-status \
     ./usr/local/bin/x-chip-calc \
     ./usr/local/bin/x-chip-time \
+    ./usr/local/bin/x-chip-open \
     ./usr/local/bin/x-chip-open-image \
+    ./usr/local/bin/x-chip-open-pdf \
     ./usr/local/bin/x-chip-music \
     ./usr/local/bin/x-chip-video \
+    ./usr/local/bin/xdg-open \
+    ./usr/local/bin/x-chip-tic80 \
+    ./usr/local/bin/x-chip-goattracker \
+    ./usr/local/bin/x-chip-mgba \
+    ./usr/local/bin/x-chip-pico8 \
+    ./usr/local/bin/x-chip-games \
+    ./usr/local/bin/x-chip-doom \
     ./usr/local/bin/x-chip-desktop-stats \
     ./usr/local/bin/x-chip-logs \
     ./usr/local/bin/x-chip-brightness \
@@ -4171,9 +5258,24 @@ for required in \
     ./etc/udev/rules.d/90-x-chip-rtl8812au-hotplug.rules \
     ./usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf \
     ./etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf \
+    ./usr/local/share/x-chip/tic80-carts.tsv \
     ./usr/local/share/x-chip/xorg/touchscreen-calibration.matrix \
     ./usr/local/share/x-chip/xorg/jwmrc \
+    ./usr/local/share/x-chip/xorg/mc.ini \
+    ./usr/local/share/mc/skins/electricblue256.ini \
     ./usr/local/share/x-chip/xorg/wallpapers/pocket-core.png \
+    ./usr/local/share/x-chip/xorg/Xdefaults \
+    ./usr/local/share/x-chip/xorg/mc-media.ext.ini \
+    ./usr/local/share/applications/x-chip-image.desktop \
+    ./usr/local/share/applications/x-chip-video.desktop \
+    ./usr/local/share/applications/x-chip-music.desktop \
+    ./usr/local/share/applications/x-chip-pdf.desktop \
+    ./usr/local/share/applications/x-chip-text.desktop \
+    ./usr/local/share/applications/mimeapps.list \
+    ./usr/local/share/applications/mimeinfo.cache \
+    ./home/$SSH_USER/Pictures/red-hood-field.jpeg \
+    ./home/$SSH_USER/Videos/night-lamp-dream.mp4 \
+    ./home/$SSH_USER/Music/dreamscape-sample.mp3 \
     ./usr/local/share/x-chip/xorg/icons/menu.xpm \
     ./usr/local/share/icons/x-chip/index.theme \
     ./usr/local/share/icons/x-chip/16x16/places/folder.xpm \

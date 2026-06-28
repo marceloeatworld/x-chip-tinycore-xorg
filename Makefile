@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: all deps base kernel rtl8812au rootfs container-build public-rootfs verify public-verify public-release flash-local-check flash-local flash-host-check flash-host flash-pi-check flash-pi clean distclean
+.PHONY: all deps base kernel rtl8812au rootfs container-build public-rootfs verify public-verify public-release community-tcz flash-local-check flash-local flash-host-check flash-host flash-pi-check flash-pi clean distclean
 
 all: rootfs
 
@@ -35,6 +35,9 @@ public-verify:
 
 public-release:
 	PUBLIC_IMAGE=1 REQUIRE_WIFI_CONFIG=0 REQUIRE_AUTHORIZED_KEYS=0 SECRETS_ENV=/dev/null ./scripts/08-package-release.sh
+
+community-tcz:
+	./scripts/09-build-community-tcz.sh
 
 flash-local-check: verify
 	./scripts/05-flash-local.sh

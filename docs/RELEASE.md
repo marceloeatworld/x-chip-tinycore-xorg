@@ -79,6 +79,44 @@ ssh_password_auth=yes
 The public SSH login is `chip` / `chip` by default. Override the password for a
 custom public build with `SSH_PASSWORD=... make public-rootfs`.
 
+## Optional Community `.tcz` Extras
+
+The base public image should stay lightweight. Build optional apps separately:
+
+```sh
+make community-tcz
+```
+
+The output goes to `dist/community-tcz/`. If that directory exists during rootfs
+assembly, `tic80.tcz`, `goattracker.tcz`, `mgba.tcz`, `doom.tcz`, and their
+dependencies are cached in `/tce/optional` for click-to-load use from the JWM
+`Games` menu. Do not add these extensions to the boot lists unless you
+intentionally want a larger and slower boot.
+
+Current extras:
+
+- `goattracker.tcz`, GPL-2-or-later, built from Debian source
+- `tic80.tcz`, MIT, built from upstream TIC-80 source
+- `mgba.tcz`, MPL-2.0, built from upstream mGBA source
+- `doom.tcz`, GPL-2-or-later Chocolate Doom plus BSD-3-Clause Freedoom assets
+- `x-chip-pico8`, launcher only; PICO-8 itself is commercial and not bundled
+
+Do not upload bundled TIC-80 cartridge files in a public release unless each
+game has explicit redistribution permission. The default image only ships a
+manifest of `tic80.com` URLs; carts are downloaded by the user on first launch.
+Do not upload ROM files, commercial Doom WAD files, or PICO-8 binaries with the
+public release. Freedoom Phase 1 in `doom.tcz` is free content and can be
+included with its license and credits.
+
+For a private image, local legal Game Boy ROMs can be included with:
+
+```sh
+INCLUDE_PRIVATE_ROMS=1 PRIVATE_ROMS_DIR=dist/private-roms/GameBoy make rootfs
+```
+
+The public path rejects `INCLUDE_PRIVATE_ROMS=1`, and `public-verify` fails if a
+`.gb`, `.gbc`, or `.gba` file is present under `~/Games/GameBoy`.
+
 ## Private Override
 
 Only for a private backup:

@@ -115,7 +115,7 @@ echo ">> local tools: $TOOLS_DIR"
 echo ">> local rootfs: $ROOTFS"
 echo ">> local sha256: $(sha256sum "$ROOTFS" | awk '{print $1}')"
 
-for cmd in sha256sum tar ssh ping dd mkimage sunxi-fel sunxi-nand-image-builder curl; do
+for cmd in sha256sum tar ssh ping ip dd mkimage sunxi-fel sunxi-nand-image-builder curl; do
     require_cmd "$cmd"
 done
 sudo -n true
@@ -235,10 +235,45 @@ grep 'PRETTY_NAME' /verify-rootfs/etc/os-release
 INNER
 }
 
+start_installer_usb_ip_watchdog() {
+    (
+        set +e
+        local iface addr
+        for _ in $(seq 180); do
+            iface=
+            for addr in /sys/class/net/*/address; do
+                [ "$(cat "$addr" 2>/dev/null)" = "de:ad:be:ef:53:02" ] || continue
+                iface=$(basename "$(dirname "$addr")")
+                break
+            done
+            if [ -n "$iface" ]; then
+                sudo -n ip addr replace 192.168.81.2/24 dev "$iface" >/dev/null 2>&1 || true
+                sudo -n ip link set "$iface" up >/dev/null 2>&1 || true
+                if ping -c1 -W1 192.168.81.1 >/dev/null 2>&1; then
+                    echo ">> installer USB host IP: $iface 192.168.81.2/24"
+                    exit 0
+                fi
+            fi
+            sleep 1
+        done
+    ) &
+    INSTALLER_USB_IP_WATCHDOG=$!
+    echo ">> installer USB IP watchdog active"
+}
+
+stop_installer_usb_ip_watchdog() {
+    [ -n "${INSTALLER_USB_IP_WATCHDOG:-}" ] || return 0
+    kill "$INSTALLER_USB_IP_WATCHDOG" >/dev/null 2>&1 || true
+    wait "$INSTALLER_USB_IP_WATCHDOG" >/dev/null 2>&1 || true
+    unset INSTALLER_USB_IP_WATCHDOG
+}
+
 echo ">> checking FEL"
 sudo -n env PATH="$PATH" sunxi-fel ver
 
 echo ">> flashing TinyCore rootfs"
+start_installer_usb_ip_watchdog
+flash_status=0
 sudo -n env PATH="$PATH" \
     ZIMAGE="$ZIMAGE" \
     DTB="$DTB" \
@@ -246,6 +281,8 @@ sudo -n env PATH="$PATH" \
     SPL="$TOOLS_DIR/.images/uboot/sunxi-spl.bin" \
     UBOOT_BIN="$TOOLS_DIR/.images/uboot/u-boot-dtb.bin" \
     INITRD="$TOOLS_DIR/.images/initrd.uimage" \
-    "$TOOLS_DIR/flash-live.sh" "$ROOTFS"
+    "$TOOLS_DIR/flash-live.sh" "$ROOTFS" || flash_status=$?
+stop_installer_usb_ip_watchdog
+[ "$flash_status" -eq 0 ] || exit "$flash_status"
 verify_flashed_rootfs
 echo ">> flash complete -- remove the FEL jumper and power-cycle into NAND"
