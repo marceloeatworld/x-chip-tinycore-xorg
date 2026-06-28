@@ -158,6 +158,20 @@ require_content() {
     }
 }
 
+require_xpm_icon() {
+    local path=$1 header
+    require_entry "$path"
+    header=$(extract_entry "$path" | sed -n 's/^"\([0-9][^"]*\)",$/\1/p' | head -n 1)
+    [ "$header" = "16 16 5 1" ] || {
+        echo "ERROR: /${path#/} XPM header is '$header', expected '16 16 5 1'" >&2
+        exit 1
+    }
+    require_content "$path" '#0F1716'
+    require_content "$path" '#1F7A66'
+    require_content "$path" '#EAF2EF'
+    require_content "$path" '#6A7A75'
+}
+
 reject_content() {
     local path=$1 pattern=$2
     require_entry "$path"
@@ -290,6 +304,7 @@ for required in \
     usr/local/bin/x-chip-media-on \
     usr/local/bin/x-chip-startx \
     usr/local/bin/x-chip-desktop-start \
+    usr/local/bin/x-chip-gtk-cache \
     usr/local/bin/x-chip-close-app \
     usr/local/bin/x-chip-x-apply-calibration \
     usr/local/bin/x-chip-touch-calibrate \
@@ -319,7 +334,7 @@ for required in \
     usr/local/share/x-chip/xorg/touchscreen-calibration.matrix \
     usr/local/share/x-chip/xorg/jwmrc \
     usr/local/share/x-chip/xorg/mc.ini \
-    usr/local/share/mc/skins/electricblue256.ini \
+    usr/local/share/mc/skins/pocketclean256.ini \
     usr/local/share/x-chip/xorg/wallpapers/pocket-core.png \
     usr/local/share/x-chip/xorg/Xdefaults \
     usr/local/share/x-chip/xorg/mc-media.ext.ini \
@@ -357,11 +372,21 @@ for required in \
     usr/local/share/icons/x-chip/16x16/actions/go-up.xpm \
     usr/local/share/icons/x-chip/16x16/actions/go-home.xpm \
     usr/local/share/icons/x-chip/16x16/actions/view-refresh.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/document-new.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/document-open.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/document-save.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/edit-copy.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/edit-paste.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/edit-undo.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/edit-redo.xpm \
     usr/local/share/icons/x-chip/16x16/apps/pcmanfm.xpm \
     usr/local/share/icons/x-chip/16x16/apps/geany.xpm \
     usr/local/share/icons/x-chip/16x16/places/folder.xpm \
     usr/local/share/icons/x-chip/16x16/places/user-home.xpm \
     usr/local/share/icons/x-chip/16x16/mimetypes/text-x-generic.xpm \
+    usr/local/share/icons/x-chip/16x16/mimetypes/application-pdf.xpm \
+    usr/local/share/icons/x-chip/16x16/mimetypes/audio-x-generic.xpm \
+    usr/local/share/icons/x-chip/16x16/mimetypes/video-x-generic.xpm \
     usr/local/share/x-chip/xorg/geany.conf \
     usr/local/share/x-chip/xorg/leafpadrc \
     usr/local/share/x-chip/xorg/pcmanfm.conf \
@@ -432,6 +457,7 @@ for root_owned in \
     usr/local/bin/x-chip-wifi-menu \
     usr/local/bin/x-chip-startx \
     usr/local/bin/x-chip-desktop-start \
+    usr/local/bin/x-chip-gtk-cache \
     usr/local/bin/x-chip-close-app \
     usr/local/bin/x-chip-x-apply-calibration \
     usr/local/bin/x-chip-touch-calibrate \
@@ -479,11 +505,21 @@ for root_owned in \
     usr/local/share/icons/x-chip/16x16/actions/go-up.xpm \
     usr/local/share/icons/x-chip/16x16/actions/go-home.xpm \
     usr/local/share/icons/x-chip/16x16/actions/view-refresh.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/document-new.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/document-open.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/document-save.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/edit-copy.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/edit-paste.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/edit-undo.xpm \
+    usr/local/share/icons/x-chip/16x16/actions/edit-redo.xpm \
     usr/local/share/icons/x-chip/16x16/apps/pcmanfm.xpm \
     usr/local/share/icons/x-chip/16x16/apps/geany.xpm \
     usr/local/share/icons/x-chip/16x16/places/folder.xpm \
     usr/local/share/icons/x-chip/16x16/places/user-home.xpm \
     usr/local/share/icons/x-chip/16x16/mimetypes/text-x-generic.xpm \
+    usr/local/share/icons/x-chip/16x16/mimetypes/application-pdf.xpm \
+    usr/local/share/icons/x-chip/16x16/mimetypes/audio-x-generic.xpm \
+    usr/local/share/icons/x-chip/16x16/mimetypes/video-x-generic.xpm \
     usr/local/share/x-chip/xorg/geany.conf \
     usr/local/share/x-chip/xorg/leafpadrc \
     usr/local/share/x-chip/xorg/pcmanfm.conf \
@@ -534,6 +570,7 @@ require_mode_pattern usr/local/bin/x-chip-brightness '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-wifi-menu '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-startx '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-desktop-start '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-gtk-cache '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-x-apply-calibration '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-touch-calibrate '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-xorg-launch-vt '-rwx*'
@@ -641,9 +678,13 @@ require_content opt/x-chip-firstboot.sh 'LCD_BRIGHTNESS_VALUE='
 require_content opt/x-chip-firstboot.sh 'LCD brightness set to'
 require_content opt/x-chip-firstboot.sh 'silence_kernel_console'
 require_content opt/x-chip-firstboot.sh 'x-chip-console-ready'
+require_content opt/x-chip-firstboot.sh 'desktop not detected after launch; retrying once'
+require_content opt/x-chip-firstboot.sh 'Desktop Xorg and window manager ready'
 require_order opt/x-chip-firstboot.sh '^silence_kernel_console$' '^touch /tmp/x-chip-console-ready'
 require_order opt/x-chip-firstboot.sh '^reset_tce_installed_markers$' '^load_tcz_boot_core$'
-require_order opt/x-chip-firstboot.sh '^touch /tmp/x-chip-console-ready' '^start_usb_debug_gadget$'
+require_order opt/x-chip-firstboot.sh '^touch /tmp/x-chip-console-ready' '^start_desktop$'
+require_order opt/x-chip-firstboot.sh '^start_desktop$' '^start_usb_debug_gadget$'
+require_order opt/x-chip-firstboot.sh '^start_usb_debug_gadget$' '^load_tcz_boot_core$'
 require_order opt/x-chip-firstboot.sh '^start_desktop$' '^load_tcz_onboot_background$'
 require_content opt/x-chip-firstboot.sh 'start_usb_debug_gadget'
 require_content opt/x-chip-firstboot.sh 'start_ssh'
@@ -669,8 +710,17 @@ require_content usr/local/bin/x-chip-startx 'openvt'
 require_content usr/local/bin/x-chip-startx 'setsid'
 require_content usr/local/bin/x-chip-startx 'chvt'
 require_content usr/local/bin/x-chip-startx 'x-chip-xorg-launch-vt'
+require_content usr/local/bin/x-chip-startx 'refresh_graphical_caches'
+require_content usr/local/bin/x-chip-startx 'x-chip-gtk-cache quick'
+require_content usr/local/bin/x-chip-startx 'x-chip-wm-recover.log'
+require_order usr/local/bin/x-chip-startx '^load_xorg_stack$' '^refresh_graphical_caches$'
+require_order usr/local/bin/x-chip-startx '^refresh_graphical_caches$' '^install_user_desktop_config$'
 require_content usr/local/bin/x-chip-desktop-start 'X_CHIP_DESKTOP_AUTOSTART'
 require_content usr/local/bin/x-chip-desktop-start 'x-chip-startx'
+require_content usr/local/bin/x-chip-gtk-cache 'gtk-update-icon-cache'
+require_content usr/local/bin/x-chip-gtk-cache 'gdk-pixbuf-query-loaders --update-cache'
+require_content usr/local/bin/x-chip-gtk-cache 'glib-compile-schemas'
+require_content usr/local/bin/x-chip-gtk-cache 'update-desktop-database'
 require_content usr/local/bin/x-chip-x-apply-calibration 'touchscreen-calibration.matrix'
 require_content usr/local/bin/x-chip-x-apply-calibration 'libinput Calibration Matrix'
 require_content usr/local/bin/x-chip-touch-calibrate 'xinput test-xi2'
@@ -680,8 +730,8 @@ require_content usr/local/bin/x-chip-xorg-session 'x-chip-x-apply-calibration'
 require_content usr/local/bin/x-chip-xorg-session 'exec jwm'
 require_content usr/local/bin/x-chip-xorg-launch-vt 'Xorg :0'
 require_content usr/local/bin/x-chip-xorg-launch-vt 'vt$X_CHIP_VT'
-require_content usr/local/bin/x-chip-xorg-launch-vt 'start_ssh_if_needed'
 require_content usr/local/bin/x-chip-xorg-launch-vt 'x-chip-brightness apply'
+reject_content usr/local/bin/x-chip-xorg-launch-vt 'start_ssh_if_needed'
 require_content usr/local/bin/x-chip-brightness '/sys/class/backlight'
 require_content usr/local/bin/x-chip-brightness 'MIN_BRIGHTNESS='
 require_content usr/local/bin/x-chip-brightness 'filetool.sh -b'
@@ -705,9 +755,14 @@ require_content usr/local/bin/x-chip-music 'play-bg'
 require_content usr/local/bin/x-chip-video 'ffplay -autoexit'
 require_content usr/local/bin/x-chip-video 'SDL_RENDER_DRIVER=${SDL_RENDER_DRIVER:-software}'
 require_content usr/local/share/applications/x-chip-image.desktop 'MimeType=image/png;image/jpeg;image/gif;image/webp;image/x-xpixmap;'
+require_content usr/local/share/applications/x-chip-image.desktop 'Icon=image-x-generic'
 require_content usr/local/share/applications/x-chip-video.desktop 'MimeType=video/mp4;video/x-m4v;video/x-msvideo;video/quicktime;video/x-matroska;video/webm;video/mpeg;'
+require_content usr/local/share/applications/x-chip-video.desktop 'Icon=video-x-generic'
 require_content usr/local/share/applications/x-chip-music.desktop 'x-chip-music play-bg %f'
+require_content usr/local/share/applications/x-chip-music.desktop 'Icon=audio-x-generic'
 require_content usr/local/share/applications/x-chip-pdf.desktop 'MimeType=application/pdf;'
+require_content usr/local/share/applications/x-chip-pdf.desktop 'Icon=application-pdf'
+require_content usr/local/share/applications/x-chip-text.desktop 'Icon=text-x-generic'
 require_content usr/local/share/applications/mimeapps.list 'image/jpeg=x-chip-image.desktop'
 require_content usr/local/share/applications/mimeapps.list 'video/mp4=x-chip-video.desktop'
 require_content usr/local/share/applications/mimeapps.list 'audio/mpeg=x-chip-music.desktop'
@@ -787,6 +842,7 @@ require_content opt/.filetool.lst 'usr/local/bin/x-chip-desktop-stats'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-brightness'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-wifi-menu'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-desktop-start'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-gtk-cache'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-close-app'
 require_content opt/.filetool.lst 'usr/local/share/x-chip/tic80-carts.tsv'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'Driver "fbdev"'
@@ -831,10 +887,38 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'label="Window" icon="window.x
 require_content usr/local/share/x-chip/xorg/icons/menu.xpm 'static char *menu_xpm'
 require_content usr/local/share/x-chip/xorg/icons/terminal.xpm 'static char *terminal_xpm'
 require_content usr/local/share/x-chip/xorg/icons/files.xpm 'static char *files_xpm'
+for icon in \
+    apps back brightness browser close code editor file files forward home image menu \
+    monitor network pocket refresh terminal touch up window; do
+    require_xpm_icon "usr/local/share/x-chip/xorg/icons/$icon.xpm"
+done
 require_content usr/local/share/icons/x-chip/index.theme 'Name=X-CHIP'
 require_content usr/local/share/icons/x-chip/index.theme 'Directories=16x16/actions,16x16/apps'
 require_content usr/local/share/icons/x-chip/16x16/places/folder.xpm 'static char *files_xpm'
 require_content usr/local/share/icons/x-chip/16x16/actions/go-home.xpm 'static char *home_xpm'
+for icon_path in \
+    actions/go-previous \
+    actions/go-next \
+    actions/go-up \
+    actions/go-home \
+    actions/view-refresh \
+    actions/document-new \
+    actions/document-open \
+    actions/document-save \
+    actions/edit-copy \
+    actions/edit-paste \
+    actions/edit-undo \
+    actions/edit-redo \
+    apps/pcmanfm \
+    apps/geany \
+    places/folder \
+    places/user-home \
+    mimetypes/text-x-generic \
+    mimetypes/application-pdf \
+    mimetypes/audio-x-generic \
+    mimetypes/video-x-generic; do
+    require_xpm_icon "usr/local/share/icons/x-chip/16x16/$icon_path.xpm"
+done
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-wifi-menu'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-wifi-menu status'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-wifi-menu interfaces'
@@ -862,29 +946,30 @@ require_content usr/local/share/x-chip/xorg/dillorc 'panel_size=small'
 require_content usr/local/share/x-chip/xorg/dillorc 'show_save=NO'
 require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'gtk-font-name = "Sans 9"'
 require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'gtk-icon-theme-name = "x-chip"'
-require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'style "electricblue"'
+require_content usr/local/share/x-chip/xorg/gtkrc-2.0 'style "pocketclean"'
 require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-font-name = Sans 9'
 require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-icon-theme-name = x-chip'
 require_content usr/local/share/x-chip/xorg/gtk3-settings.ini 'gtk-application-prefer-dark-theme = false'
 require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*transparent: false'
-require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*background: #262626'
-require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*cursorColor: #00afff'
+require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*background: #0F1716'
+require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*cursorColor: #1F7A66'
 require_content usr/local/bin/x-chip-close-app 'pkill -9'
 require_content usr/local/bin/x-chip-close-app 'pcmanfm dillo geany leafpad gpicview ffplay mpg123'
 require_content usr/local/bin/x-chip-mc 'TERM=rxvt-256color'
 reject_content usr/local/bin/x-chip-mc 'COLORTERM'
-require_content usr/local/bin/x-chip-mc 'MC_SKIN=${MC_SKIN:-electricblue256}'
-require_content usr/local/share/x-chip/xorg/mc.ini 'skin=electricblue256'
+require_content usr/local/bin/x-chip-mc 'MC_SKIN=${MC_SKIN:-pocketclean256}'
+require_content usr/local/share/x-chip/xorg/mc.ini 'skin=pocketclean256'
 require_content usr/local/share/x-chip/xorg/mc.ini '[Layout]'
 require_content usr/local/share/x-chip/xorg/mc.ini 'command_prompt=0'
 require_content usr/local/share/x-chip/xorg/mc.ini 'keybar_visible=0'
-require_content usr/local/share/mc/skins/electricblue256.ini '256colors = true'
-require_content usr/local/share/mc/skins/electricblue256.ini '_default_ = color254;color235'
-require_content usr/local/share/mc/skins/electricblue256.ini 'selected = color254;color240'
-require_content usr/local/share/x-chip/xorg/jwmrc '#262626'
-require_content usr/local/share/x-chip/xorg/jwmrc '#e4e4e4'
-require_content usr/local/share/x-chip/xorg/jwmrc '#00afff'
-require_content usr/local/share/x-chip/xorg/jwmrc '#444444'
+require_content usr/local/share/mc/skins/pocketclean256.ini 'description = Pocket Clean Skin'
+require_content usr/local/share/mc/skins/pocketclean256.ini '256colors = true'
+require_content usr/local/share/mc/skins/pocketclean256.ini 'main1 = rgb023'
+require_content usr/local/share/mc/skins/pocketclean256.ini 'main2 = rgb455'
+require_content usr/local/share/x-chip/xorg/jwmrc '#0F1716'
+require_content usr/local/share/x-chip/xorg/jwmrc '#EAF2EF'
+require_content usr/local/share/x-chip/xorg/jwmrc '#1F7A66'
+require_content usr/local/share/x-chip/xorg/jwmrc '#223331'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-mc'
 reject_content usr/local/share/x-chip/xorg/jwmrc ' -tr'
 reject_content usr/local/share/x-chip/xorg/jwmrc 'transparent'
@@ -970,6 +1055,8 @@ for script in \
     usr/local/bin/x-chip-media-on \
     usr/local/bin/x-chip-startx \
     usr/local/bin/x-chip-desktop-start \
+    usr/local/bin/x-chip-gtk-cache \
+    usr/local/bin/x-chip-close-app \
     usr/local/bin/x-chip-x-apply-calibration \
     usr/local/bin/x-chip-touch-calibrate \
     usr/local/bin/x-chip-xorg-launch-vt \

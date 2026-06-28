@@ -781,7 +781,7 @@ case "${TERM:-}" in
 		;;
 esac
 
-MC_SKIN=${MC_SKIN:-electricblue256}
+MC_SKIN=${MC_SKIN:-pocketclean256}
 export MC_SKIN
 
 ensure_x_chip_mc_ext() {
@@ -1247,7 +1247,7 @@ done
 
 msg='No PDF viewer is installed yet.'
 if command -v aterm >/dev/null 2>&1; then
-	DISPLAY="$DISPLAY" exec aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' \
+	DISPLAY="$DISPLAY" exec aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' \
 		-geometry 58x14+0+0 -title PDF -e x-chip-term-hold sh -c \
 		'echo "$1"; echo; echo "File:"; echo "$2"' sh "$msg" "$file"
 fi
@@ -2988,19 +2988,44 @@ scrub_kernel_placeholder_deps() {
 extension_ready() {
 	ext="$1"
 	app="${ext%.tcz}"
-	[ -e "/usr/local/tce.installed/$app" ] && return 0
 	case "$app" in
-		Xorg)
-			command -v Xorg >/dev/null 2>&1 && command -v xinput >/dev/null 2>&1
+		Xorg|xorg-server)
+			command -v Xorg >/dev/null 2>&1 && \
+				command -v xinput >/dev/null 2>&1 && \
+				[ -x /usr/local/lib/xorg/Xorg ]
 			;;
 		xf86-video-fbdev)
 			[ -e /usr/local/lib/xorg/modules/drivers/fbdev_drv.so ]
 			;;
-		flwm|jwm|aterm|xrandr|xinput)
+		xf86-input-libinput)
+			[ -e /usr/local/lib/xorg/modules/input/libinput_drv.so ]
+			;;
+		flwm|jwm|aterm|xrandr|xinput|dillo|leafpad|bc|gpicview|geany|pcmanfm|conky)
 			command -v "$app" >/dev/null 2>&1
 			;;
+		libffi6)
+			[ -e /usr/local/lib/libffi.so.6 ] || [ -e /usr/local/lib/libffi.so.6.0.4 ]
+			;;
+		libfm)
+			[ -e /usr/local/lib/libfm.so ] || [ -e /usr/local/lib/libfm.so.4 ] || [ -e /usr/local/lib/libfm.so.4.1.2 ]
+			;;
+		gtk2)
+			command -v gtk-query-immodules-2.0 >/dev/null 2>&1 && [ -d /usr/local/lib/gtk-2.0 ]
+			;;
+		gtk3)
+			command -v gtk-query-immodules-3.0 >/dev/null 2>&1 && [ -d /usr/local/share/glib-2.0/schemas ]
+			;;
+		gdk-pixbuf)
+			command -v gdk-pixbuf-query-loaders >/dev/null 2>&1 && [ -d /usr/local/lib/gdk-pixbuf-2.0 ]
+			;;
+		adwaita-icon-theme)
+			[ -d /usr/local/share/icons/Adwaita ]
+			;;
+		hicolor-icon-theme)
+			[ -d /usr/local/share/icons/hicolor ]
+			;;
 		*)
-			return 1
+			[ -e "/usr/local/tce.installed/$app" ]
 			;;
 	esac
 }
@@ -3065,22 +3090,23 @@ install_user_desktop_config() {
 		cp /usr/local/share/x-chip/xorg/pcmanfm.conf "$home/.config/pcmanfm/default/pcmanfm.conf"
 	[ -f "$home/.config/mc/ini" ] || \
 		cp /usr/local/share/x-chip/xorg/mc.ini "$home/.config/mc/ini"
-	[ -f "$home/.config/mimeapps.list" ] || \
-		cp /usr/local/share/applications/mimeapps.list "$home/.config/mimeapps.list"
-	[ -f "$home/.local/share/applications/mimeapps.list" ] || \
-		cp /usr/local/share/applications/mimeapps.list "$home/.local/share/applications/mimeapps.list"
+	cp /usr/local/share/applications/mimeapps.list "$home/.config/mimeapps.list"
+	cp /usr/local/share/applications/mimeapps.list "$home/.local/share/applications/mimeapps.list"
 	cp /usr/local/share/applications/x-chip-*.desktop "$home/.local/share/applications/" 2>/dev/null || true
 	[ -f "$home/.dillo/dillorc" ] || \
 		cp /usr/local/share/x-chip/xorg/dillorc "$home/.dillo/dillorc"
-	[ -f "$home/.gtkrc-2.0" ] || \
-		cp /usr/local/share/x-chip/xorg/gtkrc-2.0 "$home/.gtkrc-2.0"
+	cp /usr/local/share/x-chip/xorg/gtkrc-2.0 "$home/.gtkrc-2.0"
 	[ -f "$home/.Xdefaults" ] || \
 		cp /usr/local/share/x-chip/xorg/Xdefaults "$home/.Xdefaults"
-	[ -f "$home/.config/gtk-3.0/settings.ini" ] || \
-		cp /usr/local/share/x-chip/xorg/gtk3-settings.ini "$home/.config/gtk-3.0/settings.ini"
+	cp /usr/local/share/x-chip/xorg/gtk3-settings.ini "$home/.config/gtk-3.0/settings.ini"
 	if id "$TC_USER" >/dev/null 2>&1; then
 		chown -R "$TC_USER":"$TC_USER" "$home/.jwmrc" "$home/.config" "$home/.local" "$home/.dillo" "$home/.gtkrc-2.0" "$home/.Xdefaults" 2>/dev/null || true
 	fi
+}
+
+refresh_graphical_caches() {
+	[ -x /usr/local/bin/x-chip-gtk-cache ] || return 0
+	/usr/local/bin/x-chip-gtk-cache quick >>/tmp/x-chip-gtk-cache.log 2>&1 || true
 }
 
 wait_for_x_ready() {
@@ -3099,7 +3125,13 @@ start_x_session() {
 	if [ -S /tmp/.X11-unix/X0 ]; then
 		wait_for_x_ready || true
 		DISPLAY=:0 x-chip-x-apply-calibration >/tmp/x-chip-x-calibration.log 2>&1 || true
-		DISPLAY=:0 jwm -restart >/tmp/jwm-restart.log 2>&1 || true
+		if pidof "$X_CHIP_WM" >/dev/null 2>&1; then
+			[ "$X_CHIP_WM" = jwm ] && DISPLAY=:0 jwm -restart >/tmp/jwm-restart.log 2>&1 || true
+		elif id "$TC_USER" >/dev/null 2>&1; then
+			su - "$TC_USER" -c "DISPLAY=:0 X_CHIP_WM=$X_CHIP_WM /usr/local/bin/x-chip-xorg-session" >/tmp/x-chip-wm-recover.log 2>&1 &
+		else
+			DISPLAY=:0 X_CHIP_WM="$X_CHIP_WM" /usr/local/bin/x-chip-xorg-session >/tmp/x-chip-wm-recover.log 2>&1 &
+		fi
 		exit 0
 	fi
 	rm -f "$LOG" 2>/dev/null || sudo rm -f "$LOG" 2>/dev/null || true
@@ -3117,6 +3149,7 @@ start_x_session() {
 }
 
 load_xorg_stack
+refresh_graphical_caches
 install_user_desktop_config
 start_x_session
 EOF
@@ -3154,6 +3187,64 @@ if [ "${1:-}" = "--boot" ]; then
 fi
 
 exec env X_CHIP_WM="$WM" X_CHIP_VT="$VT" /usr/local/bin/x-chip-startx
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-gtk-cache" <<'EOF'
+#!/bin/sh
+set -u
+
+MODE=${1:-quick}
+LOG=${X_CHIP_GTK_CACHE_LOG:-/tmp/x-chip-gtk-cache.log}
+LOCK=/tmp/x-chip-gtk-cache.lock
+
+if ! mkdir "$LOCK" 2>/dev/null; then
+	exit 0
+fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+
+run_if_present() {
+	cmd=$1
+	shift
+	command -v "$cmd" >/dev/null 2>&1 || return 0
+	"$cmd" "$@" >>"$LOG" 2>&1 || true
+}
+
+refresh_icon_theme() {
+	dir=$1
+	[ -d "$dir" ] || return 0
+	cache="$dir/icon-theme.cache"
+	[ "$MODE" = full ] || [ ! -s "$cache" ] || return 0
+	run_if_present gtk-update-icon-cache -q -f -t "$dir"
+}
+
+refresh_file_if_missing() {
+	target=$1
+	shift
+	[ "$MODE" = full ] || [ ! -s "$target" ] || return 0
+	run_if_present "$@"
+}
+
+mkdir -p /usr/local/lib/gdk-pixbuf-2.0/2.10.0 \
+	/usr/local/share/glib-2.0/schemas \
+	/usr/local/share/applications \
+	/usr/local/share/mime 2>/dev/null || true
+
+refresh_file_if_missing /usr/local/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache \
+	gdk-pixbuf-query-loaders --update-cache
+refresh_file_if_missing /usr/local/share/glib-2.0/schemas/gschemas.compiled \
+	glib-compile-schemas /usr/local/share/glib-2.0/schemas
+
+refresh_icon_theme /usr/local/share/icons/x-chip
+refresh_icon_theme /usr/local/share/icons/Adwaita
+refresh_icon_theme /usr/local/share/icons/hicolor
+
+if [ "$MODE" = full ]; then
+	run_if_present gtk-query-immodules-2.0 --update-cache
+	run_if_present gtk-query-immodules-3.0 --update-cache
+	run_if_present update-desktop-database /usr/local/share/applications
+	run_if_present update-mime-database /usr/local/share/mime
+	run_if_present fc-cache -sf
+fi
 EOF
 
     install_text 0755 "$RFS/usr/local/bin/x-chip-close-app" <<'EOF'
@@ -3360,7 +3451,7 @@ draw_window_target() {
 	[ "$top" -gt "$max_top" ] && top=$max_top
 	kill "$target_pid" 2>/dev/null || true
 	geom="${TARGET_COLS}x${TARGET_ROWS}+${left}+${top}"
-	aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry "$geom" -title "$label" \
+	aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry "$geom" -title "$label" \
 		-e sh -c 'printf "\n   X\n  TAP\n"; sleep "$1"' sh "$TAP_TIMEOUT" \
 		>/tmp/x-chip-calibration-target.log 2>&1 &
 	target_pid=$!
@@ -3652,15 +3743,6 @@ XORG_CONFIG=${XORG_CONFIG:-/usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.co
 EMPTY_CONFIG_DIR=/tmp/x-chip-empty-xorg-conf
 XORG_LOG=/tmp/x-chip-xorg.log
 
-start_ssh_if_needed() {
-	pidof sshd >/dev/null 2>&1 && return 0
-	if [ -x /usr/local/etc/init.d/openssh ]; then
-		/usr/local/etc/init.d/openssh start >/var/log/openssh.log 2>&1 || true
-	elif command -v sshd >/dev/null 2>&1; then
-		sshd >/var/log/openssh.log 2>&1 || true
-	fi
-}
-
 mkdir -p /tmp/.X11-unix /tmp/.ICE-unix "$EMPTY_CONFIG_DIR"
 chmod 1777 /tmp/.X11-unix /tmp/.ICE-unix 2>/dev/null || true
 rm -f /tmp/.X11-unix/X0 /tmp/.X0-lock
@@ -3674,7 +3756,6 @@ for backlight in /sys/class/backlight/*; do
 done
 x-chip-brightness apply >/tmp/x-chip-brightness.log 2>&1 || true
 
-start_ssh_if_needed
 Xorg :0 "vt$X_CHIP_VT" -config "$XORG_CONFIG" -configdir "$EMPTY_CONFIG_DIR" -nolisten tcp >"$XORG_LOG" 2>&1 &
 xpid=$!
 ready=0
@@ -3704,7 +3785,6 @@ if [ "$ready" != 1 ]; then
 	exit 1
 fi
 
-start_ssh_if_needed
 if id "$TC_USER" >/dev/null 2>&1; then
 	su - "$TC_USER" -c "DISPLAY=:0 X_CHIP_WM=$X_CHIP_WM /usr/local/bin/x-chip-xorg-session" &
 else
@@ -3757,9 +3837,13 @@ EOF
         [ -f "$skin" ] || continue
         need_root install -m 0644 "$skin" "$RFS/usr/local/share/mc/skins/${skin##*/}"
     done
+    if [ -f config/mc-skins/gray-orange-blue256.ini ]; then
+        need_root install -m 0644 config/mc-skins/gray-orange-blue256.ini \
+            "$RFS/usr/local/share/mc/skins/pocketclean256.ini"
+    fi
     install_text 0644 "$RFS/usr/local/share/x-chip/xorg/mc.ini" <<'EOF'
 [Midnight-Commander]
-skin=electricblue256
+skin=pocketclean256
 
 [Layout]
 command_prompt=0
@@ -3837,8 +3921,20 @@ home actions/go-home
 refresh actions/view-refresh
 close actions/process-stop
 close actions/window-close
+file actions/document-new
 files actions/document-open
 editor actions/document-save
+editor actions/document-save-as
+file actions/edit-copy
+file actions/edit-cut
+file actions/edit-paste
+close actions/edit-delete
+back actions/edit-undo
+forward actions/edit-redo
+refresh actions/edit-find
+files actions/folder-new
+apps actions/list-add
+close actions/list-remove
 files apps/file-manager
 files apps/pcmanfm
 browser apps/dillo
@@ -3855,19 +3951,33 @@ files places/folder
 files places/inode-directory
 home places/user-home
 home places/folder-home
+home places/user-desktop
+files places/folder-documents
+files places/folder-download
+image places/folder-pictures
+pocket places/folder-music
+monitor places/folder-videos
 pocket places/computer
 network places/network-workgroup
+pocket devices/drive-harddisk-usb
+pocket devices/drive-removable-media-usb
 file mimetypes/text-x-generic
 file mimetypes/unknown
 editor mimetypes/text-plain
 code mimetypes/application-x-executable
 terminal mimetypes/application-x-shellscript
+terminal mimetypes/text-x-script
 browser mimetypes/text-html
 image mimetypes/image-x-generic
+image mimetypes/image-png
 pocket mimetypes/audio-x-generic
 monitor mimetypes/video-x-generic
+file mimetypes/application-pdf
 brightness status/display-brightness
 network status/network-wireless
+close status/dialog-error
+monitor status/dialog-information
+pocket status/dialog-warning
 EOF
 
     install_text 0644 "$RFS/usr/local/share/x-chip/xorg/jwmrc" <<'EOF'
@@ -3880,82 +3990,82 @@ EOF
 
   <RootMenu onroot="3">
     <Menu label="Apps" icon="apps.xpm">
-      <Program label="Terminal" icon="terminal.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Terminal</Program>
+      <Program label="Terminal" icon="terminal.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Terminal</Program>
       <Program label="Files" icon="files.xpm">pcmanfm</Program>
       <Program label="Browser" icon="browser.xpm">dillo -g 474x212+0+0</Program>
       <Program label="Editor" icon="editor.xpm">leafpad</Program>
       <Program label="Code" icon="code.xpm">geany -s -m -p -t</Program>
-      <Program label="Calculator" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Calculator -e x-chip-calc</Program>
-      <Program label="Images" icon="image.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Images -e x-chip-open-image</Program>
-      <Program label="Music" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Music -e x-chip-music</Program>
-      <Program label="Video" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Video -e x-chip-video</Program>
+      <Program label="Calculator" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Calculator -e x-chip-calc</Program>
+      <Program label="Images" icon="image.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Images -e x-chip-open-image</Program>
+      <Program label="Music" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Music -e x-chip-music</Program>
+      <Program label="Video" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Video -e x-chip-video</Program>
       <Separator/>
-      <Program label="Links" icon="browser.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Links -e links</Program>
-      <Program label="Nano" icon="editor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Nano -e nano</Program>
-      <Program label="Midnight Commander" icon="files.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Files -e x-chip-mc</Program>
+      <Program label="Links" icon="browser.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Links -e links</Program>
+      <Program label="Nano" icon="editor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Nano -e nano</Program>
+      <Program label="Midnight Commander" icon="files.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Files -e x-chip-mc</Program>
     </Menu>
     <Menu label="Games" icon="apps.xpm">
-      <Program label="Game Launcher" icon="apps.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Games -e x-chip-games</Program>
+      <Program label="Game Launcher" icon="apps.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Games -e x-chip-games</Program>
       <Separator/>
       <Program label="Doom" icon="pocket.xpm">x-chip-doom run</Program>
-      <Program label="Game Boy Launcher" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title GameBoy -e x-chip-mgba</Program>
-      <Program label="Game Boy Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title mGBA -e x-chip-term-hold x-chip-mgba status</Program>
-      <Program label="PICO-8" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title PICO-8 -e x-chip-pico8 menu</Program>
+      <Program label="Game Boy Launcher" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GameBoy -e x-chip-mgba</Program>
+      <Program label="Game Boy Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title mGBA -e x-chip-term-hold x-chip-mgba status</Program>
+      <Program label="PICO-8" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title PICO-8 -e x-chip-pico8 menu</Program>
       <Program label="TIC-80" icon="pocket.xpm">x-chip-tic80 run</Program>
-      <Program label="TIC-80 Manager" icon="apps.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 menu</Program>
-      <Program label="Install All TIC-80 Games" icon="network.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 install-all</Program>
+      <Program label="TIC-80 Manager" icon="apps.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 menu</Program>
+      <Program label="Install All TIC-80 Games" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 install-all</Program>
       <Menu label="TIC-80 Games" icon="pocket.xpm">
-        <Program label="8 Bit Panda" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play 8-bit-panda</Program>
-        <Program label="Stele" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play stele</Program>
-        <Program label="Balmung" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play balmung</Program>
-        <Program label="Supernova" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play supernova</Program>
-        <Program label="Turns of War" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play turns-of-war</Program>
-        <Program label="Cauliflower Power" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play cauliflower-power</Program>
-        <Program label="Minetic" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play minetic</Program>
-        <Program label="Powder Game" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play powder-game</Program>
-        <Program label="Secret Agents" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play secret-agents</Program>
-        <Program label="Komet" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play komet</Program>
-        <Program label="The Sky House" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play the-sky-house</Program>
-        <Program label="TIC-Sweeper" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play tic-sweeper</Program>
+        <Program label="8 Bit Panda" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play 8-bit-panda</Program>
+        <Program label="Stele" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play stele</Program>
+        <Program label="Balmung" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play balmung</Program>
+        <Program label="Supernova" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play supernova</Program>
+        <Program label="Turns of War" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play turns-of-war</Program>
+        <Program label="Cauliflower Power" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play cauliflower-power</Program>
+        <Program label="Minetic" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play minetic</Program>
+        <Program label="Powder Game" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play powder-game</Program>
+        <Program label="Secret Agents" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play secret-agents</Program>
+        <Program label="Komet" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play komet</Program>
+        <Program label="The Sky House" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play the-sky-house</Program>
+        <Program label="TIC-Sweeper" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play tic-sweeper</Program>
       </Menu>
-      <Program label="GoatTracker" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title GoatTracker -e x-chip-goattracker</Program>
+      <Program label="GoatTracker" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GoatTracker -e x-chip-goattracker</Program>
     </Menu>
     <Menu label="Network" icon="network.xpm">
-      <Program label="WiFi Setup" icon="network.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu</Program>
-      <Program label="WiFi Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu status</Program>
-      <Program label="WiFi Interfaces" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu interfaces</Program>
-      <Program label="External Scan" icon="network.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Scan -e x-chip-term-hold x-chip-wifi-menu scan-external</Program>
+      <Program label="WiFi Setup" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu</Program>
+      <Program label="WiFi Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu status</Program>
+      <Program label="WiFi Interfaces" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu interfaces</Program>
+      <Program label="External Scan" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Scan -e x-chip-term-hold x-chip-wifi-menu scan-external</Program>
     </Menu>
     <Menu label="Brightness" icon="brightness.xpm">
-      <Program label="Control" icon="brightness.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Brightness -e x-chip-brightness menu</Program>
+      <Program label="Control" icon="brightness.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Brightness -e x-chip-brightness menu</Program>
       <Program label="Brighter" icon="brightness.xpm">x-chip-brightness up</Program>
       <Program label="Dim" icon="brightness.xpm">x-chip-brightness down</Program>
       <Program label="Restore Default" icon="brightness.xpm">x-chip-brightness set 6</Program>
     </Menu>
     <Menu label="Pocket" icon="pocket.xpm">
-      <Program label="Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x15+0+0 -title Status -e x-chip-status</Program>
+      <Program label="Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x15+0+0 -title Status -e x-chip-status</Program>
       <Menu label="Time" icon="pocket.xpm">
-        <Program label="Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time status</Program>
-        <Program label="Sync Internet Time" icon="network.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time sync</Program>
-        <Program label="Set Date/Time" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Time -e x-chip-time set</Program>
+        <Program label="Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time status</Program>
+        <Program label="Sync Internet Time" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Time -e x-chip-term-hold x-chip-time sync</Program>
+        <Program label="Set Date/Time" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Time -e x-chip-time set</Program>
       </Menu>
       <Menu label="Desktop Stats" icon="monitor.xpm">
         <Program label="On" icon="monitor.xpm">x-chip-desktop-stats on</Program>
         <Program label="Off" icon="close.xpm">x-chip-desktop-stats off</Program>
-        <Program label="Status" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Stats -e x-chip-term-hold x-chip-desktop-stats status</Program>
+        <Program label="Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Stats -e x-chip-term-hold x-chip-desktop-stats status</Program>
       </Menu>
-      <Program label="Audio Mixer" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Audio -e alsamixer</Program>
-      <Program label="Power" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Power -e x-chip-term-hold x-chip-power-status</Program>
-      <Program label="Keyboard" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Keyboard -e x-chip-term-hold x-chip-keyboard-status</Program>
-      <Program label="Audio Status" icon="pocket.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Audio -e x-chip-term-hold x-chip-audio-status</Program>
-      <Program label="Logs" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Logs -e x-chip-logs</Program>
+      <Program label="Audio Mixer" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Audio -e alsamixer</Program>
+      <Program label="Power" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Power -e x-chip-term-hold x-chip-power-status</Program>
+      <Program label="Keyboard" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Keyboard -e x-chip-term-hold x-chip-keyboard-status</Program>
+      <Program label="Audio Status" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Audio -e x-chip-term-hold x-chip-audio-status</Program>
+      <Program label="Logs" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Logs -e x-chip-logs</Program>
     </Menu>
     <Menu label="Touch" icon="touch.xpm">
       <Program label="Apply Calibration" icon="touch.xpm">x-chip-x-apply-calibration</Program>
       <Program label="Calibrate" icon="touch.xpm">x-chip-touch-calibrate</Program>
     </Menu>
     <Menu label="Window" icon="window.xpm">
-      <Program label="Monitor" icon="monitor.xpm">aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Monitor -e htop</Program>
+      <Program label="Monitor" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Monitor -e htop</Program>
       <Program label="Close Apps" icon="close.xpm">x-chip-close-app all</Program>
       <Restart label="Restart UI" icon="window.xpm"/>
     </Menu>
@@ -3964,11 +4074,11 @@ EOF
   <Tray x="0" y="-1" width="480" height="32" autohide="off">
     <TrayButton label="Menu" icon="menu.xpm" popup="Open menu">root:3</TrayButton>
     <Spacer width="4"/>
-    <TrayButton label="Term" icon="terminal.xpm" popup="Terminal">exec:aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Terminal</TrayButton>
+    <TrayButton label="Term" icon="terminal.xpm" popup="Terminal">exec:aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Terminal</TrayButton>
     <Spacer width="4"/>
     <TrayButton label="Files" icon="files.xpm" popup="Files">exec:pcmanfm</TrayButton>
     <Spacer width="6"/>
-    <TrayButton label="Play" icon="pocket.xpm" popup="Games">exec:aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -geometry 58x14+0+0 -title Games -e x-chip-games</TrayButton>
+    <TrayButton label="Play" icon="pocket.xpm" popup="Games">exec:aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Games -e x-chip-games</TrayButton>
     <Spacer width="6"/>
     <TaskList maxwidth="160"/>
     <Clock format="%H:%M"/>
@@ -3979,45 +4089,45 @@ EOF
     <Width>2</Width>
     <Height>18</Height>
     <Corner>0</Corner>
-    <Foreground>#e4e4e4</Foreground>
-    <Background>#444444</Background>
-    <Outline>#585858</Outline>
+    <Foreground>#EAF2EF</Foreground>
+    <Background>#223331</Background>
+    <Outline>#6A7A75</Outline>
     <Active>
-      <Foreground>#262626</Foreground>
-      <Background>#00afff</Background>
+      <Foreground>#0F1716</Foreground>
+      <Background>#1F7A66</Background>
     </Active>
   </WindowStyle>
 
   <TrayStyle decorations="motif">
     <Font>Sans-9</Font>
-    <Background>#262626</Background>
-    <Foreground>#e4e4e4</Foreground>
+    <Background>#0F1716</Background>
+    <Foreground>#EAF2EF</Foreground>
   </TrayStyle>
 
   <TaskListStyle list="all" group="true">
     <Font>Sans-9</Font>
-    <Foreground>#e4e4e4</Foreground>
-    <Background>#444444</Background>
+    <Foreground>#EAF2EF</Foreground>
+    <Background>#223331</Background>
     <Active>
-      <Foreground>#262626</Foreground>
-      <Background>#00afff</Background>
+      <Foreground>#0F1716</Foreground>
+      <Background>#1F7A66</Background>
     </Active>
   </TaskListStyle>
 
   <MenuStyle decorations="motif">
     <Font>Sans-9</Font>
-    <Foreground>#e4e4e4</Foreground>
-    <Background>#262626</Background>
+    <Foreground>#EAF2EF</Foreground>
+    <Background>#0F1716</Background>
     <Active>
-      <Foreground>#262626</Foreground>
-      <Background>#00afff</Background>
+      <Foreground>#0F1716</Foreground>
+      <Background>#1F7A66</Background>
     </Active>
   </MenuStyle>
 
   <PopupStyle>
     <Font>Sans-9</Font>
-    <Foreground>#e4e4e4</Foreground>
-    <Background>#444444</Background>
+    <Foreground>#EAF2EF</Foreground>
+    <Background>#223331</Background>
   </PopupStyle>
 
   <Desktops width="1" height="1">
@@ -4063,7 +4173,7 @@ load_plugins=false
 load_vte=false
 
 [tools]
-terminal_cmd=aterm -bg '#262626' -fg '#e4e4e4' -cr '#00afff' -e "/bin/sh %c"
+terminal_cmd=aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -e "/bin/sh %c"
 browser_cmd=dillo
 grep_cmd=grep
 
@@ -4141,30 +4251,30 @@ gtk-icon-theme-name = "x-chip"
 gtk-toolbar-style = GTK_TOOLBAR_ICONS
 gtk-icon-sizes = "gtk-small-toolbar=16,16:gtk-large-toolbar=16,16:gtk-button=16,16:gtk-menu=16,16"
 
-style "electricblue"
+style "pocketclean"
 {
-  bg[NORMAL] = "#262626"
-  fg[NORMAL] = "#e4e4e4"
-  base[NORMAL] = "#585858"
-  text[NORMAL] = "#e4e4e4"
-  bg[ACTIVE] = "#444444"
-  fg[ACTIVE] = "#e4e4e4"
-  bg[PRELIGHT] = "#00afff"
-  fg[PRELIGHT] = "#262626"
-  bg[SELECTED] = "#00afff"
-  fg[SELECTED] = "#262626"
-  bg[INSENSITIVE] = "#444444"
-  fg[INSENSITIVE] = "#949494"
+  bg[NORMAL] = "#0F1716"
+  fg[NORMAL] = "#EAF2EF"
+  base[NORMAL] = "#6A7A75"
+  text[NORMAL] = "#EAF2EF"
+  bg[ACTIVE] = "#223331"
+  fg[ACTIVE] = "#EAF2EF"
+  bg[PRELIGHT] = "#1F7A66"
+  fg[PRELIGHT] = "#0F1716"
+  bg[SELECTED] = "#1F7A66"
+  fg[SELECTED] = "#0F1716"
+  bg[INSENSITIVE] = "#223331"
+  fg[INSENSITIVE] = "#6A7A75"
 }
-class "*" style "electricblue"
+class "*" style "pocketclean"
 EOF
 
     install_text 0644 "$RFS/usr/local/share/x-chip/xorg/Xdefaults" <<'EOF'
 Aterm*transparent: false
 Aterm*shading: 0
-Aterm*background: #262626
-Aterm*foreground: #e4e4e4
-Aterm*cursorColor: #00afff
+Aterm*background: #0F1716
+Aterm*foreground: #EAF2EF
+Aterm*cursorColor: #1F7A66
 EOF
 
     install_text 0644 "$RFS/usr/local/share/applications/x-chip-image.desktop" <<'EOF'
@@ -4172,6 +4282,7 @@ EOF
 Type=Application
 Name=X-CHIP Image Viewer
 Exec=x-chip-open-image %f
+Icon=image-x-generic
 Terminal=false
 MimeType=image/png;image/jpeg;image/gif;image/webp;image/x-xpixmap;
 NoDisplay=true
@@ -4182,6 +4293,7 @@ EOF
 Type=Application
 Name=X-CHIP Video Player
 Exec=x-chip-video play %f
+Icon=video-x-generic
 Terminal=false
 MimeType=video/mp4;video/x-m4v;video/x-msvideo;video/quicktime;video/x-matroska;video/webm;video/mpeg;
 NoDisplay=true
@@ -4192,6 +4304,7 @@ EOF
 Type=Application
 Name=X-CHIP Music Player
 Exec=x-chip-music play-bg %f
+Icon=audio-x-generic
 Terminal=false
 MimeType=audio/mpeg;audio/mp3;
 NoDisplay=true
@@ -4202,6 +4315,7 @@ EOF
 Type=Application
 Name=X-CHIP PDF Viewer
 Exec=x-chip-open-pdf %f
+Icon=application-pdf
 Terminal=false
 MimeType=application/pdf;
 NoDisplay=true
@@ -4212,6 +4326,7 @@ EOF
 Type=Application
 Name=X-CHIP Text Editor
 Exec=leafpad %f
+Icon=text-x-generic
 Terminal=false
 MimeType=text/plain;text/markdown;application/x-shellscript;
 NoDisplay=true
@@ -5030,6 +5145,33 @@ start_desktop() {
 	echo "Starting default desktop"
 	/usr/local/bin/x-chip-desktop-start --boot >/var/log/x-chip-desktop.log 2>&1 || \
 		echo "WARN: desktop autostart failed; see /var/log/x-chip-desktop.log"
+
+	desktop_ready() {
+		[ -S /tmp/.X11-unix/X0 ] || return 1
+		pidof Xorg >/dev/null 2>&1 || return 1
+		pidof jwm >/dev/null 2>&1 || pidof flwm >/dev/null 2>&1
+	}
+
+	wait_for_desktop() {
+		i=0
+		while [ "$i" -lt 15 ]; do
+			desktop_ready && return 0
+			i=$((i + 1))
+			sleep 1
+		done
+		return 1
+	}
+
+	wait_for_desktop && {
+		echo "Desktop Xorg and window manager ready"
+		return 0
+	}
+
+	echo "WARN: desktop not detected after launch; retrying once"
+	/usr/local/bin/x-chip-desktop-start --boot >>/var/log/x-chip-desktop.log 2>&1 || \
+		echo "WARN: desktop autostart retry failed; see /var/log/x-chip-desktop.log"
+	wait_for_desktop && echo "Desktop Xorg and window manager ready after retry" || \
+		echo "WARN: desktop still not ready after retry; see /var/log/x-chip-desktop.log"
 }
 
 ensure_ssh_host_keys() {
@@ -5057,10 +5199,10 @@ load_pocketchip_input_modules
 load_keymap
 enable_display_console
 touch /tmp/x-chip-console-ready 2>/dev/null || true
+start_desktop
 start_usb_debug_gadget
 load_tcz_boot_core
 start_ssh
-start_desktop
 load_tcz_onboot_background
 EOF
     sed -i "s/@HOSTNAME@/$CHIP_HOSTNAME/g" "$tmp"
@@ -5148,6 +5290,7 @@ EOF
         "usr/local/bin/x-chip-media-on" \
         "usr/local/bin/x-chip-startx" \
         "usr/local/bin/x-chip-desktop-start" \
+        "usr/local/bin/x-chip-gtk-cache" \
         "usr/local/bin/x-chip-close-app" \
         "usr/local/bin/x-chip-x-apply-calibration" \
         "usr/local/bin/x-chip-touch-calibrate" \
@@ -5249,6 +5392,8 @@ for required in \
     ./usr/local/bin/x-chip-media-on \
     ./usr/local/bin/x-chip-startx \
     ./usr/local/bin/x-chip-desktop-start \
+    ./usr/local/bin/x-chip-gtk-cache \
+    ./usr/local/bin/x-chip-close-app \
     ./usr/local/bin/x-chip-x-apply-calibration \
     ./usr/local/bin/x-chip-touch-calibrate \
     ./usr/local/bin/x-chip-xorg-launch-vt \
@@ -5262,7 +5407,7 @@ for required in \
     ./usr/local/share/x-chip/xorg/touchscreen-calibration.matrix \
     ./usr/local/share/x-chip/xorg/jwmrc \
     ./usr/local/share/x-chip/xorg/mc.ini \
-    ./usr/local/share/mc/skins/electricblue256.ini \
+    ./usr/local/share/mc/skins/pocketclean256.ini \
     ./usr/local/share/x-chip/xorg/wallpapers/pocket-core.png \
     ./usr/local/share/x-chip/xorg/Xdefaults \
     ./usr/local/share/x-chip/xorg/mc-media.ext.ini \
