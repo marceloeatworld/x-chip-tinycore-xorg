@@ -189,14 +189,19 @@ for node in /dev/console /dev/null /dev/tty /dev/tty0 /dev/tty1 /dev/ttyS0 /dev/
   test "$(stat -c '%u:%g' "/verify-rootfs$node")" = "0:0"
 done
 grep -q 'PocketCHIP TinyCore' /verify-rootfs/etc/os-release
+grep -Eq '^[[:space:]]*tmpfs[[:space:]]+/tmp[[:space:]]+tmpfs[[:space:]]+' /verify-rootfs/etc/fstab
+grep -Eq '^[[:space:]]*tmpfs[[:space:]]+/run[[:space:]]+tmpfs[[:space:]]+' /verify-rootfs/etc/fstab
+grep -Eq '^[[:space:]]*tmpfs[[:space:]]+/var/run[[:space:]]+tmpfs[[:space:]]+' /verify-rootfs/etc/fstab
+grep -Eq '^[[:space:]]*tmpfs[[:space:]]+/var/lock[[:space:]]+tmpfs[[:space:]]+' /verify-rootfs/etc/fstab
 grep -q 'udevadm settle --timeout=5' /verify-rootfs/etc/init.d/tc-config
 grep -q 'fstab_pid:-' /verify-rootfs/etc/init.d/tc-config
 grep -q 'WAITED' /verify-rootfs/opt/x-chip-tty1-getty.sh
-grep -q '192.168.82.1' /verify-rootfs/opt/x-chip-firstboot.sh
-grep -q 'start_usb_debug_gadget' /verify-rootfs/opt/x-chip-firstboot.sh
-grep -q 'load_tcz_boot_core' /verify-rootfs/opt/x-chip-firstboot.sh
-grep -q 'load_tcz_onboot_background' /verify-rootfs/opt/x-chip-firstboot.sh
-grep -q 'start_ssh' /verify-rootfs/opt/x-chip-firstboot.sh
+test ! -e /verify-rootfs/opt/x-chip-firstboot.sh
+grep -q '192.168.82.1' /verify-rootfs/opt/x-chip-boot.sh
+grep -q 'start_usb_debug_gadget' /verify-rootfs/opt/x-chip-boot.sh
+grep -q 'load_tcz_boot_core' /verify-rootfs/opt/x-chip-boot.sh
+grep -q 'load_tcz_onboot_background' /verify-rootfs/opt/x-chip-boot.sh
+grep -q 'start_ssh' /verify-rootfs/opt/x-chip-boot.sh
 grep -q 'UseDNS no' /verify-rootfs/usr/local/etc/ssh/sshd_config
 if grep -q 'UsePAM' /verify-rootfs/usr/local/etc/ssh/sshd_config; then
   echo "ERROR: sshd_config contains unsupported UsePAM option" >&2

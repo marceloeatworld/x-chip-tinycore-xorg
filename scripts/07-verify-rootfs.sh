@@ -257,7 +257,10 @@ for required in \
     sbin/init \
     init \
     etc/inittab \
+    etc/fstab \
+    etc/init.d/rcS \
     etc/init.d/tc-config \
+    etc/udev/rules.d/98-tc.rules \
     etc/os-release \
     etc/issue \
     etc/motd \
@@ -273,7 +276,7 @@ for required in \
     dev/tty1 \
     dev/ttyS0 \
     dev/net/tun \
-    opt/x-chip-firstboot.sh \
+    opt/x-chip-boot.sh \
     opt/x-chip-autologin.sh \
     opt/x-chip-tty1-getty.sh \
     opt/x-chip-early-debug.sh \
@@ -431,7 +434,7 @@ for root_owned in \
     boot/zImage \
     boot/boot.scr \
     boot/sun5i-r8-chip.dtb \
-    opt/x-chip-firstboot.sh \
+    opt/x-chip-boot.sh \
     opt/x-chip-autologin.sh \
     opt/x-chip-tty1-getty.sh \
     usr/local/bin/x-chip-keyboard-status \
@@ -662,48 +665,73 @@ require_content etc/os-release 'VERSION_ID=16'
 require_content etc/os-release "$PROJECT_REPO_URL"
 require_content etc/issue 'PocketCHIP TinyCore'
 require_content etc/motd 'PocketCHIP TinyCore'
+require_content etc/fstab 'tmpfs           /tmp         tmpfs'
+require_content etc/fstab 'tmpfs           /run         tmpfs'
+require_content etc/fstab 'tmpfs           /var/run     tmpfs'
+require_content etc/fstab 'tmpfs           /var/lock    tmpfs'
+require_content etc/init.d/rcS '/bin/mount -a'
 require_content etc/init.d/tc-config 'udevadm settle --timeout=5'
 require_content etc/init.d/tc-config 'fstab_pid:-'
-require_content opt/x-chip-firstboot.sh 'ensure_devpts'
-require_content opt/x-chip-firstboot.sh 'x-chip-firstboot.lock'
-require_content opt/x-chip-firstboot.sh 'prepare_tce_runtime'
-require_content opt/x-chip-firstboot.sh 'reset_tce_installed_markers'
-require_content opt/x-chip-firstboot.sh 'materialized-tcz.lst'
-require_content opt/x-chip-firstboot.sh '/usr/local/tce.installed'
-require_content opt/x-chip-firstboot.sh 'load_tcz_boot_core'
-require_content opt/x-chip-firstboot.sh 'load_tcz_onboot_background'
-require_content opt/x-chip-firstboot.sh 'tce-load -il'
-require_content opt/x-chip-firstboot.sh 'load_keymap'
-require_content opt/x-chip-firstboot.sh 'configure_power_management'
-require_content opt/x-chip-firstboot.sh 'load_audio_modules'
-require_content opt/x-chip-firstboot.sh 'Power Amplifier DAC'
-require_content opt/x-chip-firstboot.sh "Power Amplifier Mute' on"
-require_content opt/x-chip-firstboot.sh 'LCD_BRIGHTNESS_VALUE='
-require_content opt/x-chip-firstboot.sh 'LCD brightness set to'
-require_content opt/x-chip-firstboot.sh 'silence_kernel_console'
-require_content opt/x-chip-firstboot.sh 'x-chip-console-ready'
-require_content opt/x-chip-firstboot.sh 'desktop not detected after launch; retrying once'
-require_content opt/x-chip-firstboot.sh 'Desktop Xorg and window manager ready'
-require_order opt/x-chip-firstboot.sh '^silence_kernel_console$' '^touch /tmp/x-chip-console-ready'
-require_order opt/x-chip-firstboot.sh '^reset_tce_installed_markers$' '^load_tcz_boot_core$'
-require_order opt/x-chip-firstboot.sh '^touch /tmp/x-chip-console-ready' '^start_desktop$'
-require_order opt/x-chip-firstboot.sh '^start_desktop$' '^start_usb_debug_gadget$'
-require_order opt/x-chip-firstboot.sh '^start_usb_debug_gadget$' '^load_tcz_boot_core$'
-require_order opt/x-chip-firstboot.sh '^start_desktop$' '^load_tcz_onboot_background$'
-require_content opt/x-chip-firstboot.sh 'start_usb_debug_gadget'
-require_content opt/x-chip-firstboot.sh 'start_ssh'
-require_content opt/x-chip-firstboot.sh 'start_wifi'
-require_content opt/x-chip-firstboot.sh 'sync_time_background'
-require_order opt/x-chip-firstboot.sh '^[[:space:]]*start_wifi$' '^[[:space:]]*sync_time_background$'
-require_content opt/x-chip-firstboot.sh 'start_desktop'
-require_content opt/x-chip-firstboot.sh 'x-chip-desktop-start --boot'
-require_content opt/x-chip-firstboot.sh 'RTL8812AU boot autoload disabled'
-require_content opt/x-chip-firstboot.sh 'load_rtl8812au_if_present'
+require_content etc/udev/rules.d/98-tc.rules 'rebuildfstab'
+require_content opt/x-chip-boot.sh 'ensure_devpts'
+require_content opt/x-chip-boot.sh 'ensure_runtime_dirs'
+require_content opt/x-chip-boot.sh '/var/run/wpa_supplicant'
+require_content opt/x-chip-boot.sh 'RUN_DIR=/dev/shm/x-chip'
+require_content opt/x-chip-boot.sh 'RUN_MARKER="$RUN_DIR/boot-ran"'
+require_content opt/x-chip-boot.sh 'RUN_LOCK="$RUN_DIR/boot.lock"'
+require_content opt/x-chip-boot.sh 'CONSOLE_READY="$RUN_DIR/console-ready"'
+require_content opt/x-chip-boot.sh 'TCE_READY="$RUN_DIR/tce-loaded"'
+require_content opt/x-chip-boot.sh 'prepare_tce_runtime'
+require_content opt/x-chip-boot.sh 'reset_tce_installed_markers'
+require_content opt/x-chip-boot.sh 'materialized-tcz.lst'
+require_content opt/x-chip-boot.sh '/usr/local/tce.installed'
+require_content opt/x-chip-boot.sh 'load_tcz_boot_core'
+require_content opt/x-chip-boot.sh 'load_tcz_onboot_background'
+require_content opt/x-chip-boot.sh 'tce-load -il'
+require_content opt/x-chip-boot.sh 'load_keymap'
+require_content opt/x-chip-boot.sh 'configure_power_management'
+require_content opt/x-chip-boot.sh 'load_audio_modules'
+require_content opt/x-chip-boot.sh 'Power Amplifier DAC'
+require_content opt/x-chip-boot.sh "Power Amplifier Mute' on"
+require_content opt/x-chip-boot.sh 'LCD_BRIGHTNESS_VALUE='
+require_content opt/x-chip-boot.sh 'LCD brightness set to'
+require_content opt/x-chip-boot.sh 'silence_kernel_console'
+require_content opt/x-chip-boot.sh 'touch "$RUN_MARKER"'
+require_content opt/x-chip-boot.sh 'touch "$CONSOLE_READY"'
+require_content opt/x-chip-boot.sh 'touch "$TCE_READY"'
+require_content opt/x-chip-boot.sh 'desktop not detected after launch; retrying once'
+require_content opt/x-chip-boot.sh 'Desktop Xorg and window manager ready'
+require_content opt/x-chip-boot.sh 'rm -rf /tmp/x-chip-firstboot-ran /tmp/x-chip-firstboot.lock'
+reject_entry opt/x-chip-firstboot.sh
+reject_content opt/x-chip-boot.sh 'if [ -e /tmp/x-chip-firstboot-ran'
+reject_content opt/x-chip-boot.sh 'mkdir /tmp/x-chip-firstboot.lock'
+reject_content opt/x-chip-boot.sh 'touch /tmp/x-chip-firstboot-ran'
+reject_content opt/x-chip-boot.sh 'touch /tmp/x-chip-console-ready'
+require_order opt/x-chip-boot.sh '^ensure_devpts$' '^ensure_runtime_dirs$'
+require_order opt/x-chip-boot.sh '^ensure_runtime_dirs$' '^prepare_tce_runtime$'
+require_order opt/x-chip-boot.sh '^silence_kernel_console$' '^touch "\$CONSOLE_READY"'
+require_order opt/x-chip-boot.sh '^reset_tce_installed_markers$' '^load_tcz_boot_core$'
+require_order opt/x-chip-boot.sh '^touch "\$CONSOLE_READY"' '^start_usb_debug_gadget &[[:space:]]*$'
+require_order opt/x-chip-boot.sh '^start_usb_debug_gadget &[[:space:]]*$' '^load_tcz_boot_core$'
+require_order opt/x-chip-boot.sh '^load_tcz_boot_core$' '^start_ssh$'
+require_order opt/x-chip-boot.sh '^start_ssh$' '^load_tcz_onboot_background$'
+require_order opt/x-chip-boot.sh '^load_tcz_onboot_background$' '^start_desktop$'
+require_content opt/x-chip-boot.sh 'start_usb_debug_gadget'
+require_content opt/x-chip-boot.sh 'start_ssh'
+require_content opt/x-chip-boot.sh 'ssh.lock'
+require_content opt/x-chip-boot.sh 'start_wifi'
+require_content opt/x-chip-boot.sh 'sync_time_background'
+require_order opt/x-chip-boot.sh '^[[:space:]]*start_wifi$' '^[[:space:]]*sync_time_background$'
+require_content opt/x-chip-boot.sh 'start_desktop'
+require_content opt/x-chip-boot.sh 'x-chip-desktop-start --boot'
+require_content opt/x-chip-boot.sh 'RTL8812AU boot autoload disabled'
+require_content opt/x-chip-boot.sh 'load_rtl8812au_if_present'
 require_content usr/local/sbin/x-chip-rtl8812au-hotplug 'modprobe 8812au'
 require_content usr/local/sbin/x-chip-rtl8812au-hotplug 'remains the primary SSH/network adapter'
 require_content etc/udev/rules.d/90-x-chip-rtl8812au-hotplug.rules 'x-chip-rtl8812au-hotplug'
 require_content etc/modprobe.d/8812au.conf 'options 8812au'
 require_content opt/x-chip-tty1-getty.sh 'getty -n'
+require_content opt/x-chip-tty1-getty.sh 'READY=/dev/shm/x-chip/console-ready'
 require_content opt/x-chip-tty1-getty.sh 'WAITED'
 require_content opt/x-chip-autologin.sh 'login -f'
 require_content usr/local/bin/x-chip-media-on 'ffplay'
@@ -721,6 +749,8 @@ require_content usr/local/bin/x-chip-startx 'x-chip-xorg-launch-vt'
 require_content usr/local/bin/x-chip-startx 'refresh_graphical_caches'
 require_content usr/local/bin/x-chip-startx 'x-chip-gtk-cache quick'
 require_content usr/local/bin/x-chip-startx 'x-chip-wm-recover.log'
+require_content usr/local/bin/x-chip-startx 'pidof Xorg'
+require_content usr/local/bin/x-chip-startx 'rm -f /tmp/.X11-unix/X0 /tmp/.X0-lock'
 require_order usr/local/bin/x-chip-startx '^load_xorg_stack$' '^refresh_graphical_caches$'
 require_order usr/local/bin/x-chip-startx '^refresh_graphical_caches$' '^install_user_desktop_config$'
 require_content usr/local/bin/x-chip-desktop-start 'X_CHIP_DESKTOP_AUTOSTART'
@@ -824,6 +854,7 @@ require_content usr/local/bin/x-chip-wifi-menu 'find_client_wifi_iface'
 require_content usr/local/bin/x-chip-wifi-menu 'find_scan_wifi_iface'
 require_content usr/local/bin/x-chip-wifi-menu 'scan-external'
 require_content usr/local/bin/x-chip-wifi-menu 'sudo iw dev "$iface" scan'
+require_content usr/local/bin/x-chip-logs '/opt/x-chip-boot.log'
 require_content usr/local/bin/x-chip-logs '/var/log/x-chip-desktop.log'
 require_content usr/local/etc/x-chip/display.conf 'LCD_BRIGHTNESS='
 require_content usr/local/etc/x-chip/desktop.conf 'X_CHIP_DESKTOP_AUTOSTART=1'
@@ -841,6 +872,8 @@ require_content usr/local/share/x-chip/materialized-tcz.lst 'gpicview.tcz'
 require_content usr/local/share/x-chip/materialized-tcz.lst 'conky.tcz'
 require_content opt/.filetool.lst 'usr/local/share/x-chip/xorg/touchscreen-calibration.matrix'
 require_content opt/.filetool.lst 'usr/local/etc/x-chip'
+require_content opt/.filetool.lst 'opt/x-chip-boot.sh'
+reject_content opt/.filetool.lst 'opt/x-chip-firstboot.sh'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-logs'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-term-hold'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-status'
@@ -1073,7 +1106,7 @@ require_content tce/xorg.lst 'pcmanfm.tcz'
 require_content tce/xorg.lst 'conky.tcz'
 
 for script in \
-    opt/x-chip-firstboot.sh \
+    opt/x-chip-boot.sh \
     opt/x-chip-autologin.sh \
     opt/x-chip-tty1-getty.sh \
     opt/x-chip-early-debug.sh \

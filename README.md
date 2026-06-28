@@ -35,7 +35,7 @@ Desktop status:
 - `Xorg.tcz`, `xf86-video-fbdev.tcz`, `flwm.tcz`, `jwm.tcz`, `aterm.tcz`,
   `xrandr.tcz`, `xinput.tcz`, and app dependencies like `libffi6.tcz` are
   preseeded into `/tce/optional`
-- Xorg/JWM starts automatically from firstboot via `x-chip-desktop-start`
+- Xorg/JWM starts automatically from the boot runtime via `x-chip-desktop-start`
 - tty1, serial console, USB debug networking, and SSH remain available as
   recovery paths
 - the current stable path is fbdev + JWM on VT2; fbturbo is not loaded because

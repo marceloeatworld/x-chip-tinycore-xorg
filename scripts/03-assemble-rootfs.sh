@@ -133,6 +133,7 @@ read_touch_calibration_matrix() {
 }
 
 ssh_shadow_password() {
+    local salt
     if [ "$SSH_PASSWORD_AUTH" != 1 ]; then
         printf ''
         return 0
@@ -152,7 +153,12 @@ ssh_shadow_password() {
         echo "ERROR: openssl is required to hash SSH_PASSWORD" >&2
         exit 1
     fi
-    printf '%s\n' "$SSH_PASSWORD" | openssl passwd -6 -salt "${SSH_PASSWORD_SALT:-xchiptinycore}" -stdin
+    salt=${SSH_PASSWORD_SALT:-}
+    if [ -z "$salt" ]; then
+        salt=$(openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9./' | head -c 16)
+        [ -n "$salt" ] || salt="xchip$(date +%s)"
+    fi
+    printf '%s\n' "$SSH_PASSWORD" | openssl passwd -6 -salt "$salt" -stdin
 }
 
 create_static_dev_nodes() {
@@ -432,6 +438,36 @@ PocketCHIP TinyCore $TINYCORE_VERSION
 EOF
 }
 
+install_runtime_mounts() {
+    need_root install -d -m1777 "$RFS/tmp"
+    need_root install -d -m0755 "$RFS/run" "$RFS/var/run" "$RFS/etc/udev/rules.d"
+    need_root install -d -m0775 "$RFS/var/lock"
+
+    install_text 0644 "$RFS/etc/fstab" <<'EOF'
+# /etc/fstab
+proc            /proc        proc    defaults          0       0
+sysfs           /sys         sysfs   defaults          0       0
+devpts          /dev/pts     devpts  defaults          0       0
+tmpfs           /dev/shm     tmpfs   defaults          0       0
+tmpfs           /tmp         tmpfs   mode=1777,nosuid,nodev 0 0
+tmpfs           /run         tmpfs   mode=0755,nosuid,nodev 0 0
+tmpfs           /var/run     tmpfs   mode=0755,nosuid,nodev 0 0
+tmpfs           /var/lock    tmpfs   mode=0775,nosuid,nodev 0 0
+EOF
+
+    if [ -f "$RFS/tmp/98-tc.rules" ]; then
+        need_root install -m0644 "$RFS/tmp/98-tc.rules" "$RFS/etc/udev/rules.d/98-tc.rules"
+    else
+        install_text 0644 "$RFS/etc/udev/rules.d/98-tc.rules" <<'EOF'
+KERNEL=="ram*", SUBSYSTEM=="block", GOTO="tc.rules_end"
+KERNEL=="loop*", SUBSYSTEM=="block", GOTO="tc.rules_end"
+ACTION=="add",		SUBSYSTEM=="block",	RUN+="/bin/sh -c '/usr/sbin/rebuildfstab'"
+ACTION=="remove",	SUBSYSTEM=="block",	RUN+="/bin/sh -c '/usr/sbin/rebuildfstab'"
+LABEL="tc.rules_end"
+EOF
+    fi
+}
+
 install_console_config() {
     install_text 0755 "$RFS/opt/x-chip-autologin.sh" <<'EOF'
 #!/bin/sh
@@ -441,7 +477,7 @@ EOF
 
     install_text 0755 "$RFS/opt/x-chip-tty1-getty.sh" <<'EOF'
 #!/bin/sh
-READY=/tmp/x-chip-console-ready
+READY=/dev/shm/x-chip/console-ready
 WAITED=0
 while [ ! -e "$READY" ] && [ "$WAITED" -lt 30 ]; do
 	sleep 1
@@ -455,7 +491,7 @@ if [ -w /dev/tty1 ]; then
 	printf '\033c\033[2J\033[H' 2>/dev/null || true
 	printf 'PocketCHIP TinyCore ready - kernel %s\n\n' "$(uname -r)" 2>/dev/null || true
 	if [ ! -e "$READY" ]; then
-		printf 'Firstboot is still running; see /opt/x-chip-firstboot.log\n\n' 2>/dev/null || true
+		printf 'Boot runtime is still running; see /opt/x-chip-boot.log\n\n' 2>/dev/null || true
 	fi
 fi
 
@@ -2258,7 +2294,7 @@ show_file() {
 }
 
 case "${1:-all}" in
-	firstboot) show_file /opt/x-chip-firstboot.log 140 ;;
+	boot) show_file /opt/x-chip-boot.log 140 ;;
 	desktop) show_file /var/log/x-chip-desktop.log 140 ;;
 	xorg)
 		show_file /tmp/x-chip-startx.log 100
@@ -2276,7 +2312,7 @@ case "${1:-all}" in
 		dmesg | tail -n 140
 		;;
 	all)
-		show_file /opt/x-chip-firstboot.log 120
+		show_file /opt/x-chip-boot.log 120
 		show_file /var/log/x-chip-desktop.log 120
 		show_file /tmp/x-chip-startx.log 80
 		show_file /tmp/x-chip-xorg.log 100
@@ -2286,7 +2322,7 @@ case "${1:-all}" in
 		echo "== dmesg =="
 		dmesg | tail -n 80
 		;;
-	*) echo "Usage: x-chip-logs [all|firstboot|desktop|xorg|wifi|system]" >&2; exit 2 ;;
+	*) echo "Usage: x-chip-logs [all|boot|desktop|xorg|wifi|system]" >&2; exit 2 ;;
 esac
 
 echo
@@ -3209,16 +3245,20 @@ wait_for_x_ready() {
 start_x_session() {
 	echo "Starting Xorg desktop session on VT$X_CHIP_VT; log: $LOG"
 	if [ -S /tmp/.X11-unix/X0 ]; then
-		wait_for_x_ready || true
-		DISPLAY=:0 x-chip-x-apply-calibration >/tmp/x-chip-x-calibration.log 2>&1 || true
-		if pidof "$X_CHIP_WM" >/dev/null 2>&1; then
-			[ "$X_CHIP_WM" = jwm ] && DISPLAY=:0 jwm -restart >/tmp/jwm-restart.log 2>&1 || true
-		elif id "$TC_USER" >/dev/null 2>&1; then
-			su - "$TC_USER" -c "DISPLAY=:0 X_CHIP_WM=$X_CHIP_WM /usr/local/bin/x-chip-xorg-session" >/tmp/x-chip-wm-recover.log 2>&1 &
+		if ! pidof Xorg >/dev/null 2>&1; then
+			rm -f /tmp/.X11-unix/X0 /tmp/.X0-lock 2>/dev/null || true
 		else
-			DISPLAY=:0 X_CHIP_WM="$X_CHIP_WM" /usr/local/bin/x-chip-xorg-session >/tmp/x-chip-wm-recover.log 2>&1 &
+			wait_for_x_ready || true
+			DISPLAY=:0 x-chip-x-apply-calibration >/tmp/x-chip-x-calibration.log 2>&1 || true
+			if pidof "$X_CHIP_WM" >/dev/null 2>&1; then
+				[ "$X_CHIP_WM" = jwm ] && DISPLAY=:0 jwm -restart >/tmp/jwm-restart.log 2>&1 || true
+			elif id "$TC_USER" >/dev/null 2>&1; then
+				su - "$TC_USER" -c "DISPLAY=:0 X_CHIP_WM=$X_CHIP_WM /usr/local/bin/x-chip-xorg-session" >/tmp/x-chip-wm-recover.log 2>&1 &
+			else
+				DISPLAY=:0 X_CHIP_WM="$X_CHIP_WM" /usr/local/bin/x-chip-xorg-session >/tmp/x-chip-wm-recover.log 2>&1 &
+			fi
+			exit 0
 		fi
-		exit 0
 	fi
 	rm -f "$LOG" 2>/dev/null || sudo rm -f "$LOG" 2>/dev/null || true
 	if [ "$(id -u)" = 0 ]; then
@@ -4897,7 +4937,7 @@ compile_host_mime_database() {
     update-mime-database "$mime_dir"
 }
 
-install_firstboot_script() {
+install_boot_runtime_script() {
     local tmp
     tmp=$(mktemp)
     cat >"$tmp" <<'EOF'
@@ -4908,20 +4948,32 @@ HOSTNAME_VALUE="@HOSTNAME@"
 RTL8812AU_AUTOLOAD_VALUE="@RTL8812AU_AUTOLOAD@"
 RTL8812AU_HOTPLUG_VALUE="@RTL8812AU_HOTPLUG@"
 LCD_BRIGHTNESS_VALUE="@LCD_BRIGHTNESS@"
-LOG=/opt/x-chip-firstboot.log
+LOG=/opt/x-chip-boot.log
 exec >>"$LOG" 2>&1
-echo "=== x-chip-firstboot $(date 2>/dev/null || true) ==="
+echo "=== x-chip boot runtime $(date 2>/dev/null || true) ==="
 
-if [ -e /tmp/x-chip-firstboot-ran ]; then
-	echo "x-chip-firstboot already ran this boot"
+if ! grep -q ' /dev/shm ' /proc/mounts 2>/dev/null; then
+	mkdir -p /dev/shm 2>/dev/null || true
+	mount -t tmpfs tmpfs /dev/shm 2>/dev/null || true
+fi
+RUN_DIR=/dev/shm/x-chip
+RUN_MARKER="$RUN_DIR/boot-ran"
+RUN_LOCK="$RUN_DIR/boot.lock"
+CONSOLE_READY="$RUN_DIR/console-ready"
+TCE_READY="$RUN_DIR/tce-loaded"
+mkdir -p "$RUN_DIR" 2>/dev/null || true
+rm -rf /tmp/x-chip-firstboot-ran /tmp/x-chip-firstboot.lock 2>/dev/null || true
+
+if [ -e "$RUN_MARKER" ]; then
+	echo "x-chip boot runtime already ran this boot"
 	exit 0
 fi
-if ! mkdir /tmp/x-chip-firstboot.lock 2>/dev/null; then
-	echo "x-chip-firstboot already running"
+if ! mkdir "$RUN_LOCK" 2>/dev/null; then
+	echo "x-chip boot runtime already running"
 	exit 0
 fi
-trap 'rmdir /tmp/x-chip-firstboot.lock 2>/dev/null || true' EXIT
-touch /tmp/x-chip-firstboot-ran 2>/dev/null || true
+trap 'rmdir "$RUN_LOCK" 2>/dev/null || true' EXIT
+touch "$RUN_MARKER" 2>/dev/null || true
 
 hostname "$HOSTNAME_VALUE" 2>/dev/null || true
 
@@ -4938,6 +4990,14 @@ ensure_devpts() {
 		mount -t devpts devpts /dev/pts -o mode=620,ptmxmode=666 2>/dev/null || \
 			mount -t devpts devpts /dev/pts 2>/dev/null || true
 	fi
+}
+
+ensure_runtime_dirs() {
+	mkdir -p /run /var/run /var/lock /var/run/dbus /var/run/dhcpcd \
+		/var/run/tcebootload /var/run/wpa_supplicant 2>/dev/null || true
+	chmod 755 /run /var/run /var/run/dbus /var/run/dhcpcd \
+		/var/run/tcebootload /var/run/wpa_supplicant 2>/dev/null || true
+	chmod 775 /var/lock 2>/dev/null || true
 }
 
 reset_tce_installed_markers() {
@@ -5031,7 +5091,7 @@ load_tcz_onboot_background() {
 		load_rtl8812au_if_present
 		load_extra_wifi_modules
 		start_ssh
-		touch /tmp/x-chip-tce-loaded 2>/dev/null || true
+		touch "$TCE_READY" 2>/dev/null || true
 	) >/var/log/x-chip-tce-background.log 2>&1 &
 }
 
@@ -5317,49 +5377,65 @@ ensure_ssh_host_keys() {
 }
 
 start_ssh() {
+	lock_dir="${RUN_DIR:-/dev/shm/x-chip}/ssh.lock"
+	mkdir -p "${lock_dir%/*}" 2>/dev/null || true
+	if ! mkdir "$lock_dir" 2>/dev/null; then
+		return 0
+	fi
 	ensure_ssh_host_keys
-	pidof sshd >/dev/null 2>&1 && return 0
+	if pidof sshd >/dev/null 2>&1; then
+		rmdir "$lock_dir" 2>/dev/null || true
+		return 0
+	fi
 	if [ -x /usr/local/etc/init.d/openssh ]; then
 		/usr/local/etc/init.d/openssh start >/var/log/openssh.log 2>&1 || true
 	elif command -v sshd >/dev/null 2>&1; then
 		sshd >/var/log/openssh.log 2>&1 || true
 	fi
+	rmdir "$lock_dir" 2>/dev/null || true
 }
 
 silence_kernel_console
 ensure_devpts
+ensure_runtime_dirs
 prepare_tce_runtime
 reset_tce_installed_markers
 load_pocketchip_input_modules
 load_keymap
 enable_display_console
-touch /tmp/x-chip-console-ready 2>/dev/null || true
-start_desktop
-start_usb_debug_gadget
+touch "$CONSOLE_READY" 2>/dev/null || true
+start_usb_debug_gadget &
 load_tcz_boot_core
 start_ssh
 load_tcz_onboot_background
+start_desktop
 EOF
     sed -i "s/@HOSTNAME@/$CHIP_HOSTNAME/g" "$tmp"
     sed -i "s/@SSH_USER@/$SSH_USER/g" "$tmp"
     sed -i "s/@RTL8812AU_AUTOLOAD@/${RTL8812AU_AUTOLOAD:-0}/g" "$tmp"
     sed -i "s/@RTL8812AU_HOTPLUG@/${RTL8812AU_HOTPLUG:-1}/g" "$tmp"
     sed -i "s/@LCD_BRIGHTNESS@/${LCD_BRIGHTNESS:-6}/g" "$tmp"
-    need_root install -m755 "$tmp" "$RFS/opt/x-chip-firstboot.sh"
+    need_root rm -f "$RFS/opt/x-chip-firstboot.sh"
+    need_root install -m755 "$tmp" "$RFS/opt/x-chip-boot.sh"
     rm -f "$tmp"
 
     need_root touch "$RFS/opt/bootlocal.sh"
     tmp=$(mktemp)
-    awk '$0 != "/usr/local/etc/init.d/openssh start" { print }' "$RFS/opt/bootlocal.sh" >"$tmp"
+    awk '
+        $0 == "/usr/local/etc/init.d/openssh start" { next }
+        $0 == "/opt/x-chip-firstboot.sh" { next }
+        $0 == "/opt/x-chip-boot.sh" { next }
+        $0 ~ /^# --- x-chip.*(firstboot|boot runtime).*---$/ { next }
+        { print }
+    ' "$RFS/opt/bootlocal.sh" >"$tmp"
     need_root install -m755 "$tmp" "$RFS/opt/bootlocal.sh"
     rm -f "$tmp"
     need_root chown 0:0 "$RFS/opt/bootlocal.sh" 2>/dev/null || true
     need_root chmod +x "$RFS/opt/bootlocal.sh"
-    need_root sed -i 's/x-chip-tinycore firstboot/x-chip-tinycore-xorg firstboot/g' "$RFS/opt/bootlocal.sh"
-    if ! need_root grep -q '/opt/x-chip-firstboot.sh' "$RFS/opt/bootlocal.sh"; then
+    if ! need_root grep -q '/opt/x-chip-boot.sh' "$RFS/opt/bootlocal.sh"; then
         need_root tee -a "$RFS/opt/bootlocal.sh" >/dev/null <<'EOF'
-# --- x-chip-tinycore-xorg firstboot ---
-/opt/x-chip-firstboot.sh
+# --- x-chip boot runtime ---
+/opt/x-chip-boot.sh
 EOF
     fi
 
@@ -5382,6 +5458,10 @@ Subsystem sftp internal-sftp
 EOF
 
     need_root touch "$RFS/opt/.filetool.lst"
+    tmp=$(mktemp)
+    awk '$0 != "opt/x-chip-firstboot.sh" { print }' "$RFS/opt/.filetool.lst" >"$tmp"
+    need_root install -m644 "$tmp" "$RFS/opt/.filetool.lst"
+    rm -f "$tmp"
     for entry in \
         "etc/hostname" \
         "etc/hosts" \
@@ -5438,7 +5518,7 @@ EOF
         "usr/local/share/x-chip/tic80-carts.tsv" \
         "usr/local/share/x-chip/xorg/touchscreen-calibration.matrix" \
         "usr/local/sbin/x-chip-rtl8812au-hotplug" \
-        "opt/x-chip-firstboot.sh" \
+        "opt/x-chip-boot.sh" \
         "opt/x-chip-autologin.sh" \
         "opt/x-chip-tty1-getty.sh" \
         "opt/bootlocal.sh"; do
@@ -5462,6 +5542,7 @@ echo "$TC_MIRROR" | need_root tee "$RFS/opt/tcemirror" >/dev/null
 # 3. Runtime identity, SSH, WiFi and local extensions.
 install_runtime_identity
 install_os_branding
+install_runtime_mounts
 install_console_config
 patch_tinycore_tce_setup
 patch_tinycore_tc_config
@@ -5481,7 +5562,7 @@ install_early_debug
 preseed_tcz_extensions
 materialize_tcz_runtime_extensions
 install_preseeded_firmware_fallback
-install_firstboot_script
+install_boot_runtime_script
 compile_host_mime_database
 
 # 4. pack (numeric owners; the flasher rebuilds the UBIFS from this tree).
@@ -5498,7 +5579,7 @@ for required in \
     ./boot/zImage \
     ./boot/boot.scr \
     ./boot/sun5i-r8-chip.dtb \
-    ./opt/x-chip-firstboot.sh \
+    ./opt/x-chip-boot.sh \
     ./opt/x-chip-autologin.sh \
     ./opt/x-chip-tty1-getty.sh \
     ./usr/local/bin/x-chip-keyboard-status \
