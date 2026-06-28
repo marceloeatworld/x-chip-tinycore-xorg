@@ -1552,15 +1552,14 @@ DISPLAY=${DISPLAY:-:0}
 HOME_DIR=${HOME:-/home/chip}
 MANIFEST=${X_CHIP_TIC80_CARTS_MANIFEST:-/usr/local/share/x-chip/tic80-carts.tsv}
 CART_DIR=${X_CHIP_TIC80_CART_DIR:-$HOME_DIR/TIC-80/carts}
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
 
-run_as_root() {
-	if [ "$(id -u)" = 0 ]; then
-		"$@"
-	elif command -v sudo >/dev/null 2>&1; then
-		sudo "$@"
+run_tce_load() {
+	target=$1
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
 	else
-		echo "Need root privileges." >&2
-		return 1
+		tce-load -il "$target"
 	fi
 }
 
@@ -1574,7 +1573,7 @@ load_app() {
 	fi
 	if [ -f /tce/optional/tic80.tcz ]; then
 		echo "Loading TIC-80..."
-		run_as_root tce-load -il /tce/optional/tic80.tcz
+		run_tce_load /tce/optional/tic80.tcz
 	else
 		echo "tic80.tcz is not cached in /tce/optional." >&2
 		echo "Build it with 'make community-tcz' before assembling the image." >&2
@@ -1721,15 +1720,14 @@ EOF
 set -eu
 
 DISPLAY=${DISPLAY:-:0}
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
 
-run_as_root() {
-	if [ "$(id -u)" = 0 ]; then
-		"$@"
-	elif command -v sudo >/dev/null 2>&1; then
-		sudo "$@"
+run_tce_load() {
+	target=$1
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
 	else
-		echo "Need root privileges." >&2
-		return 1
+		tce-load -il "$target"
 	fi
 }
 
@@ -1740,7 +1738,7 @@ if ! command -v goattracker >/dev/null 2>&1; then
 	fi
 	if [ -f /tce/optional/goattracker.tcz ]; then
 		echo "Loading GoatTracker..."
-		run_as_root tce-load -il /tce/optional/goattracker.tcz
+		run_tce_load /tce/optional/goattracker.tcz
 	else
 		echo "goattracker.tcz is not cached in /tce/optional." >&2
 		echo "Build it with 'make community-tcz' before assembling the image." >&2
@@ -1763,15 +1761,14 @@ set -eu
 DISPLAY=${DISPLAY:-:0}
 HOME_DIR=${HOME:-/home/chip}
 ROM_DIR=${X_CHIP_MGBA_ROM_DIR:-$HOME_DIR/Games/GameBoy}
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
 
-run_as_root() {
-	if [ "$(id -u)" = 0 ]; then
-		"$@"
-	elif command -v sudo >/dev/null 2>&1; then
-		sudo "$@"
+run_tce_load() {
+	target=$1
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
 	else
-		echo "Need root privileges." >&2
-		return 1
+		tce-load -il "$target"
 	fi
 }
 
@@ -1797,7 +1794,7 @@ load_app() {
 	fi
 	if [ -f /tce/optional/mgba.tcz ]; then
 		echo "Loading mGBA..."
-		run_as_root tce-load -il /tce/optional/mgba.tcz
+		run_tce_load /tce/optional/mgba.tcz
 	else
 		echo "mgba.tcz is not cached in /tce/optional." >&2
 		echo "Build it with './scripts/09-build-community-tcz.sh mgba' before assembling the image." >&2
@@ -2070,15 +2067,14 @@ set -eu
 DISPLAY=${DISPLAY:-:0}
 HOME=${HOME:-/home/chip}
 IWAD=${X_CHIP_DOOM_IWAD:-/usr/local/share/doom/freedoom1.wad}
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
 
-run_as_root() {
-	if [ "$(id -u)" = 0 ]; then
-		"$@"
-	elif command -v sudo >/dev/null 2>&1; then
-		sudo "$@"
+run_tce_load() {
+	target=$1
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
 	else
-		echo "Need root privileges." >&2
-		return 1
+		tce-load -il "$target"
 	fi
 }
 
@@ -2092,7 +2088,7 @@ load_app() {
 	fi
 	if [ -f /tce/optional/doom.tcz ]; then
 		echo "Loading Doom..."
-		run_as_root tce-load -il /tce/optional/doom.tcz
+		run_tce_load /tce/optional/doom.tcz
 	else
 		echo "doom.tcz is not cached in /tce/optional." >&2
 		echo "Build it with './scripts/09-build-community-tcz.sh doom' before assembling the image." >&2
@@ -4135,28 +4131,28 @@ EOF
     <Menu label="Games" icon="apps.xpm">
       <Program label="Game Launcher" icon="apps.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Games -e x-chip-games</Program>
       <Separator/>
-      <Program label="Doom" icon="pocket.xpm">x-chip-doom run</Program>
+      <Program label="Doom" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Doom -e x-chip-term-hold x-chip-doom run</Program>
       <Program label="Game Boy Launcher" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GameBoy -e x-chip-mgba</Program>
       <Program label="Game Boy Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title mGBA -e x-chip-term-hold x-chip-mgba status</Program>
       <Program label="PICO-8" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title PICO-8 -e x-chip-pico8 menu</Program>
-      <Program label="TIC-80" icon="pocket.xpm">x-chip-tic80 run</Program>
+      <Program label="TIC-80" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 run</Program>
       <Program label="TIC-80 Manager" icon="apps.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 menu</Program>
       <Program label="Install All TIC-80 Games" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 install-all</Program>
       <Menu label="TIC-80 Games" icon="pocket.xpm">
-        <Program label="8 Bit Panda" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play 8-bit-panda</Program>
-        <Program label="Stele" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play stele</Program>
-        <Program label="Balmung" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play balmung</Program>
-        <Program label="Supernova" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play supernova</Program>
-        <Program label="Turns of War" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play turns-of-war</Program>
-        <Program label="Cauliflower Power" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play cauliflower-power</Program>
-        <Program label="Minetic" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play minetic</Program>
-        <Program label="Powder Game" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play powder-game</Program>
-        <Program label="Secret Agents" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play secret-agents</Program>
-        <Program label="Komet" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play komet</Program>
-        <Program label="The Sky House" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play the-sky-house</Program>
-        <Program label="TIC-Sweeper" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 play tic-sweeper</Program>
+        <Program label="8 Bit Panda" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play 8-bit-panda</Program>
+        <Program label="Stele" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play stele</Program>
+        <Program label="Balmung" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play balmung</Program>
+        <Program label="Supernova" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play supernova</Program>
+        <Program label="Turns of War" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play turns-of-war</Program>
+        <Program label="Cauliflower Power" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play cauliflower-power</Program>
+        <Program label="Minetic" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play minetic</Program>
+        <Program label="Powder Game" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play powder-game</Program>
+        <Program label="Secret Agents" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play secret-agents</Program>
+        <Program label="Komet" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play komet</Program>
+        <Program label="The Sky House" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play the-sky-house</Program>
+        <Program label="TIC-Sweeper" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 play tic-sweeper</Program>
       </Menu>
-      <Program label="GoatTracker" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GoatTracker -e x-chip-goattracker</Program>
+      <Program label="GoatTracker" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GoatTracker -e x-chip-term-hold x-chip-goattracker</Program>
     </Menu>
     <Menu label="Network" icon="network.xpm">
       <Program label="WiFi Setup" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu</Program>
