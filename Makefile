@@ -1,5 +1,7 @@
 SHELL := /bin/bash
-.PHONY: all deps base kernel rtl8812au rootfs container-build public-rootfs verify public-verify public-release community-tcz flash-local-check flash-local flash-host-check flash-host flash-pi-check flash-pi clean distclean
+PRIVATE_ROMS_DIR ?= dist/private-roms/GameBoy
+
+.PHONY: all deps base kernel rtl8812au rootfs container-build private-gameboy-rootfs public-rootfs verify public-verify public-release community-tcz flash-local-check flash-local flash-host-check flash-host flash-pi-check flash-pi clean distclean
 
 all: rootfs
 
@@ -23,6 +25,21 @@ rootfs: rtl8812au
 
 container-build:
 	./scripts/06-build-in-container.sh
+
+private-gameboy-rootfs:
+	@if [ ! -d "$(PRIVATE_ROMS_DIR)" ]; then \
+		echo "ERROR: private ROM directory does not exist: $(PRIVATE_ROMS_DIR)" >&2; \
+		echo "Put legal .gb/.gbc/.gba files there, or override PRIVATE_ROMS_DIR=..." >&2; \
+		exit 1; \
+	fi
+	@if ! find "$(PRIVATE_ROMS_DIR)" -maxdepth 1 -type f \( -iname '*.gb' -o -iname '*.gbc' -o -iname '*.gba' \) -print -quit | grep -q .; then \
+		echo "ERROR: no .gb/.gbc/.gba files found in $(PRIVATE_ROMS_DIR)" >&2; \
+		exit 1; \
+	fi
+	@if [ ! -f dist/community-tcz/mgba.tcz ]; then \
+		echo "WARN: dist/community-tcz/mgba.tcz is missing; run 'make community-tcz' if you want the image to include the mGBA emulator cache." >&2; \
+	fi
+	INCLUDE_PRIVATE_ROMS=1 PRIVATE_ROMS_DIR="$(PRIVATE_ROMS_DIR)" ./scripts/06-build-in-container.sh
 
 public-rootfs:
 	PUBLIC_IMAGE=1 REQUIRE_WIFI_CONFIG=0 REQUIRE_AUTHORIZED_KEYS=0 SECRETS_ENV=/dev/null ./scripts/06-build-in-container.sh

@@ -1589,6 +1589,7 @@ HOME_DIR=${HOME:-/home/chip}
 MANIFEST=${X_CHIP_TIC80_CARTS_MANIFEST:-/usr/local/share/x-chip/tic80-carts.tsv}
 CART_DIR=${X_CHIP_TIC80_CART_DIR:-$HOME_DIR/TIC-80/carts}
 TIC80_CONFIG_ROOT=${X_CHIP_TIC80_CONFIG_ROOT:-$HOME_DIR/.local/share/com.nesbox.tic/TIC-80/.local}
+TIC80_CONFIG_HASH=${X_CHIP_TIC80_CONFIG_HASH:-be42d6f}
 TIC80_SCALE=${X_CHIP_TIC80_SCALE:-2}
 TIC80_FULLSCREEN=${X_CHIP_TIC80_FULLSCREEN:-1}
 TIC80_POCKET_KEYS=${X_CHIP_TIC80_POCKET_KEYS:-1}
@@ -1713,10 +1714,6 @@ install_all() {
 	done
 }
 
-tic80_version_hash() {
-	tic80 --version 2>&1 | sed -n 's/.*(\([0-9a-f][0-9a-f]*\)).*/\1/p' | sed -n '1p'
-}
-
 write_pocketchip_tic80_options() {
 	opt=$1
 	mkdir -p "${opt%/*}"
@@ -1743,9 +1740,8 @@ patch_tic80_options_file() {
 
 ensure_pocketchip_tic80_keys() {
 	[ "$TIC80_POCKET_KEYS" = 1 ] || return 0
-	hash=$(tic80_version_hash || true)
-	if [ -n "$hash" ]; then
-		opt="$TIC80_CONFIG_ROOT/$hash/options.dat"
+	if [ -n "$TIC80_CONFIG_HASH" ]; then
+		opt="$TIC80_CONFIG_ROOT/$TIC80_CONFIG_HASH/options.dat"
 		[ -e "$opt" ] || write_pocketchip_tic80_options "$opt"
 	fi
 	[ -d "$TIC80_CONFIG_ROOT" ] || return 0
@@ -3560,6 +3556,48 @@ done
 DISPLAY=${DISPLAY:-:0} jwm -restart 2>/dev/null || true
 EOF
 
+    install_text 0755 "$RFS/usr/local/bin/x-chip-game-launch" <<'EOF'
+#!/bin/sh
+set -eu
+
+[ "$#" -gt 0 ] || {
+	echo "Usage: x-chip-game-launch COMMAND [ARGS...]" >&2
+	exit 2
+}
+
+cmd=$1
+shift
+case "$cmd" in
+	x-chip-tic80|x-chip-mgba|x-chip-doom|x-chip-pico8|x-chip-goattracker) ;;
+	*) echo "Refusing to launch non-game command: $cmd" >&2; exit 2 ;;
+esac
+
+DISPLAY=${DISPLAY:-:0}
+HOME=${HOME:-/home/chip}
+LOG=${X_CHIP_GAME_LAUNCH_LOG:-/tmp/x-chip-game-launch.log}
+
+case "$cmd" in
+	x-chip-tic80) pidof tic80 >/dev/null 2>&1 && exit 0 ;;
+	x-chip-mgba) pidof mgba-sdl1 >/dev/null 2>&1 || pidof mgba >/dev/null 2>&1 && exit 0 ;;
+	x-chip-doom) pidof chocolate-doom >/dev/null 2>&1 && exit 0 ;;
+	x-chip-pico8) pidof pico8 >/dev/null 2>&1 && exit 0 ;;
+	x-chip-goattracker) pidof goattracker >/dev/null 2>&1 && exit 0 ;;
+esac
+
+(
+	cd "$HOME" 2>/dev/null || cd /
+	export DISPLAY HOME
+	{
+		echo
+		echo "=== $(date 2>/dev/null || true) ==="
+		echo "$cmd $*"
+	} >>"$LOG"
+	exec "$cmd" "$@" >>"$LOG" 2>&1
+) &
+
+exit 0
+EOF
+
     install_text 0755 "$RFS/usr/local/bin/x-chip-x-apply-calibration" <<'EOF'
 #!/bin/sh
 set -eu
@@ -4321,22 +4359,22 @@ EOF
       <Program label="Game Boy Launcher" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GameBoy -e x-chip-mgba</Program>
       <Program label="Game Boy Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title mGBA -e x-chip-term-hold x-chip-mgba status</Program>
       <Program label="PICO-8" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title PICO-8 -e x-chip-pico8 menu</Program>
-      <Program label="TIC-80" icon="pocket.xpm">x-chip-tic80 run</Program>
+      <Program label="TIC-80" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 run</Program>
       <Program label="TIC-80 Manager" icon="apps.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 menu</Program>
       <Program label="Install All TIC-80 Games" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-term-hold x-chip-tic80 install-all</Program>
       <Menu label="TIC-80 Games" icon="pocket.xpm">
-        <Program label="8 Bit Panda" icon="pocket.xpm">x-chip-tic80 play 8-bit-panda</Program>
-        <Program label="Stele" icon="pocket.xpm">x-chip-tic80 play stele</Program>
-        <Program label="Balmung" icon="pocket.xpm">x-chip-tic80 play balmung</Program>
-        <Program label="Supernova" icon="pocket.xpm">x-chip-tic80 play supernova</Program>
-        <Program label="Turns of War" icon="pocket.xpm">x-chip-tic80 play turns-of-war</Program>
-        <Program label="Cauliflower Power" icon="pocket.xpm">x-chip-tic80 play cauliflower-power</Program>
-        <Program label="Minetic" icon="pocket.xpm">x-chip-tic80 play minetic</Program>
-        <Program label="Powder Game" icon="pocket.xpm">x-chip-tic80 play powder-game</Program>
-        <Program label="Secret Agents" icon="pocket.xpm">x-chip-tic80 play secret-agents</Program>
-        <Program label="Komet" icon="pocket.xpm">x-chip-tic80 play komet</Program>
-        <Program label="The Sky House" icon="pocket.xpm">x-chip-tic80 play the-sky-house</Program>
-        <Program label="TIC-Sweeper" icon="pocket.xpm">x-chip-tic80 play tic-sweeper</Program>
+        <Program label="8 Bit Panda" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play 8-bit-panda</Program>
+        <Program label="Stele" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play stele</Program>
+        <Program label="Balmung" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play balmung</Program>
+        <Program label="Supernova" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play supernova</Program>
+        <Program label="Turns of War" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play turns-of-war</Program>
+        <Program label="Cauliflower Power" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play cauliflower-power</Program>
+        <Program label="Minetic" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play minetic</Program>
+        <Program label="Powder Game" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play powder-game</Program>
+        <Program label="Secret Agents" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play secret-agents</Program>
+        <Program label="Komet" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play komet</Program>
+        <Program label="The Sky House" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play the-sky-house</Program>
+        <Program label="TIC-Sweeper" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play tic-sweeper</Program>
       </Menu>
       <Program label="GoatTracker" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GoatTracker -e x-chip-term-hold x-chip-goattracker</Program>
     </Menu>
@@ -5754,6 +5792,7 @@ EOF
         "usr/local/bin/x-chip-gtk-cache" \
         "usr/local/bin/x-chip-close-app" \
         "usr/local/bin/x-chip-close-game" \
+        "usr/local/bin/x-chip-game-launch" \
         "usr/local/bin/x-chip-x-apply-calibration" \
         "usr/local/bin/x-chip-touch-calibrate" \
         "usr/local/bin/x-chip-xorg-launch-vt" \
@@ -5861,6 +5900,7 @@ for required in \
     ./usr/local/bin/x-chip-gtk-cache \
     ./usr/local/bin/x-chip-close-app \
     ./usr/local/bin/x-chip-close-game \
+    ./usr/local/bin/x-chip-game-launch \
     ./usr/local/bin/x-chip-x-apply-calibration \
     ./usr/local/bin/x-chip-touch-calibrate \
     ./usr/local/bin/x-chip-xorg-launch-vt \

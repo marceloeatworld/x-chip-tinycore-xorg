@@ -282,11 +282,16 @@ For PICO-8, install your licensed Linux ARM files under `~/pico-8/pico8`,
 For a private image only, legal local ROMs can be copied into the rootfs with:
 
 ```sh
-INCLUDE_PRIVATE_ROMS=1 PRIVATE_ROMS_DIR=dist/private-roms/GameBoy make rootfs
+mkdir -p dist/private-roms/GameBoy
+cp /path/to/your/legal-roms/*.{gb,gbc,gba} dist/private-roms/GameBoy/
+make community-tcz
+make private-gameboy-rootfs
 ```
 
-This is rejected when `PUBLIC_IMAGE=1`, and public release verification fails
-if any `.gb`, `.gbc`, or `.gba` file is found under `~/Games/GameBoy`.
+`PRIVATE_ROMS_DIR` defaults to `dist/private-roms/GameBoy` and can be overridden
+for personal builds. This is rejected when `PUBLIC_IMAGE=1`, and public release
+verification fails if any `.gb`, `.gbc`, or `.gba` file is found under
+`~/Games/GameBoy`.
 
 ## Public Build
 

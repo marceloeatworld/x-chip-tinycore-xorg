@@ -310,6 +310,7 @@ for required in \
     usr/local/bin/x-chip-gtk-cache \
     usr/local/bin/x-chip-close-app \
     usr/local/bin/x-chip-close-game \
+    usr/local/bin/x-chip-game-launch \
     usr/local/bin/x-chip-x-apply-calibration \
     usr/local/bin/x-chip-touch-calibrate \
     usr/local/bin/x-chip-xorg-launch-vt \
@@ -466,6 +467,7 @@ for root_owned in \
     usr/local/bin/x-chip-gtk-cache \
     usr/local/bin/x-chip-close-app \
     usr/local/bin/x-chip-close-game \
+    usr/local/bin/x-chip-game-launch \
     usr/local/bin/x-chip-x-apply-calibration \
     usr/local/bin/x-chip-touch-calibrate \
     usr/local/bin/x-chip-xorg-launch-vt \
@@ -579,6 +581,7 @@ require_mode_pattern usr/local/bin/x-chip-wifi-menu '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-startx '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-desktop-start '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-gtk-cache '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-game-launch '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-x-apply-calibration '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-touch-calibrate '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-xorg-launch-vt '-rwx*'
@@ -838,6 +841,7 @@ require_content usr/local/bin/x-chip-tic80 'tls_ready'
 require_content usr/local/bin/x-chip-tic80 '/usr/local/etc/pki/certs/ca-bundle.crt'
 require_content usr/local/bin/x-chip-tic80 'curl --retry 2 --connect-timeout 20'
 require_content usr/local/bin/x-chip-tic80 'TIC80_POCKET_KEYS'
+require_content usr/local/bin/x-chip-tic80 'TIC80_CONFIG_HASH=${X_CHIP_TIC80_CONFIG_HASH:-be42d6f}'
 require_content usr/local/bin/x-chip-tic80 'ensure_pocketchip_tic80_keys'
 require_content usr/local/bin/x-chip-tic80 'SDL_RENDER_DRIVER=${SDL_RENDER_DRIVER:-software}'
 require_content usr/local/bin/x-chip-tic80 '--fullscreen'
@@ -845,6 +849,7 @@ require_content usr/local/bin/x-chip-tic80 '--soft'
 require_content usr/local/bin/x-chip-tic80 '--scale="$TIC80_SCALE"'
 require_content usr/local/bin/x-chip-tic80 '--cmd=run'
 require_content usr/local/bin/x-chip-tic80 'printf '\''\034\035'\'''
+reject_content usr/local/bin/x-chip-tic80 'tic80 --version'
 require_content usr/local/bin/x-chip-goattracker 'run_tce_load /tce/optional/goattracker.tcz'
 require_content usr/local/bin/x-chip-goattracker 'su "$TC_USER" -c "tce-load -il $target"'
 require_content usr/local/bin/x-chip-mgba 'run_tce_load /tce/optional/mgba.tcz'
@@ -951,6 +956,7 @@ require_content opt/.filetool.lst 'usr/local/bin/x-chip-desktop-start'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-gtk-cache'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-close-app'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-close-game'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-game-launch'
 require_content opt/.filetool.lst 'usr/local/share/x-chip/tic80-carts.tsv'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'Driver "fbdev"'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'AutoBindGPU'
@@ -988,8 +994,10 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-mgba'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="PICO-8" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-pico8 menu'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-games'
-require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-tic80 run'
-require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-tic80 play 8-bit-panda'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-game-launch x-chip-tic80 run'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-game-launch x-chip-tic80 play 8-bit-panda'
+reject_content usr/local/share/x-chip/xorg/jwmrc '<Program label="TIC-80" icon="pocket.xpm">x-chip-tic80 run</Program>'
+reject_content usr/local/share/x-chip/xorg/jwmrc '<Program label="8 Bit Panda" icon="pocket.xpm">x-chip-tic80 play 8-bit-panda</Program>'
 reject_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 run'
 reject_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 play'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-goattracker'
@@ -1106,6 +1114,9 @@ require_content usr/local/bin/x-chip-close-app 'pkill -9'
 require_content usr/local/bin/x-chip-close-app 'pcmanfm dillo geany leafpad gpicview ffplay mpg123'
 require_content usr/local/bin/x-chip-close-game 'tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker'
 require_content usr/local/bin/x-chip-close-game 'pkill -9 "$name"'
+require_content usr/local/bin/x-chip-game-launch 'x-chip-tic80|x-chip-mgba|x-chip-doom|x-chip-pico8|x-chip-goattracker'
+require_content usr/local/bin/x-chip-game-launch '/tmp/x-chip-game-launch.log'
+require_content usr/local/bin/x-chip-game-launch 'pidof tic80'
 require_content usr/local/bin/x-chip-mc 'TERM=rxvt-256color'
 reject_content usr/local/bin/x-chip-mc 'COLORTERM'
 require_content usr/local/bin/x-chip-mc 'MC_SKIN=${MC_SKIN:-pocketclean256}'
@@ -1220,6 +1231,7 @@ for script in \
     usr/local/bin/x-chip-gtk-cache \
     usr/local/bin/x-chip-close-app \
     usr/local/bin/x-chip-close-game \
+    usr/local/bin/x-chip-game-launch \
     usr/local/bin/x-chip-x-apply-calibration \
     usr/local/bin/x-chip-touch-calibrate \
     usr/local/bin/x-chip-xorg-launch-vt \
