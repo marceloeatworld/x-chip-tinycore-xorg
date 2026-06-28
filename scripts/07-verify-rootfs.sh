@@ -404,6 +404,7 @@ for required in \
     home/$SSH_USER/Downloads \
     home/$SSH_USER/Games/GameBoy \
     home/$SSH_USER/Pictures/red-hood-field.jpeg \
+    home/$SSH_USER/Videos/pocket-video-demo.mp4 \
     home/$SSH_USER/Videos/night-lamp-dream.mp4 \
     home/$SSH_USER/Music/dreamscape-sample.mp3 \
     usr/share/kmap/pocketchip.kmap \
@@ -676,6 +677,7 @@ require_content opt/x-chip-firstboot.sh 'load_keymap'
 require_content opt/x-chip-firstboot.sh 'configure_power_management'
 require_content opt/x-chip-firstboot.sh 'load_audio_modules'
 require_content opt/x-chip-firstboot.sh 'Power Amplifier DAC'
+require_content opt/x-chip-firstboot.sh "Power Amplifier Mute' on"
 require_content opt/x-chip-firstboot.sh 'LCD_BRIGHTNESS_VALUE='
 require_content opt/x-chip-firstboot.sh 'LCD brightness set to'
 require_content opt/x-chip-firstboot.sh 'silence_kernel_console'
@@ -705,7 +707,11 @@ require_content opt/x-chip-tty1-getty.sh 'getty -n'
 require_content opt/x-chip-tty1-getty.sh 'WAITED'
 require_content opt/x-chip-autologin.sh 'login -f'
 require_content usr/local/bin/x-chip-media-on 'ffplay'
+require_content usr/local/bin/x-chip-media-on 'mpg123'
 require_content usr/local/bin/x-chip-media-on 'tce-load'
+require_content usr/local/bin/x-chip-media-on 'x-chip-media-on.lock'
+require_content usr/local/bin/x-chip-media-on 'load_tcz_one ffmpeg.tcz'
+require_content usr/local/bin/x-chip-media-on 'load_tcz_one mpg123.tcz'
 require_content usr/local/bin/x-chip-startx 'XORG_LIST=/tce/xorg.lst'
 require_content usr/local/bin/x-chip-startx 'X_CHIP_WM'
 require_content usr/local/bin/x-chip-startx 'openvt'
@@ -750,19 +756,25 @@ require_content usr/local/bin/x-chip-time 'ntpd -nq'
 require_content usr/local/bin/x-chip-time 'sync-background'
 require_content usr/local/bin/x-chip-open 'x-chip-open-image "$target"'
 require_content usr/local/bin/x-chip-open 'x-chip-video play "$target"'
-require_content usr/local/bin/x-chip-open 'x-chip-music play-bg "$target"'
+require_content usr/local/bin/x-chip-open 'aterm -title Video -e x-chip-video play "$target"'
+require_content usr/local/bin/x-chip-open 'aterm -title Music -e x-chip-term-hold x-chip-music play "$target"'
+require_content usr/local/bin/x-chip-open 'x-chip-music play "$target"'
 require_content usr/local/bin/x-chip-open 'x-chip-open-pdf "$target"'
 require_content usr/local/bin/x-chip-open-image 'gpicview'
 require_content usr/local/bin/x-chip-open-pdf 'No PDF viewer is installed yet.'
 require_content usr/local/bin/x-chip-music 'mpg123 -C'
 require_content usr/local/bin/x-chip-music 'play-bg'
+require_content usr/local/bin/x-chip-music 'pkill -x ffplay'
 require_content usr/local/bin/x-chip-video 'ffplay -autoexit'
 require_content usr/local/bin/x-chip-video 'SDL_RENDER_DRIVER=${SDL_RENDER_DRIVER:-software}'
+require_content usr/local/bin/x-chip-video 'pocket-video-demo.mp4'
+require_content usr/local/bin/x-chip-video 'pkill -x mpg123'
 require_content usr/local/share/applications/x-chip-image.desktop 'MimeType=image/png;image/jpeg;image/gif;image/webp;image/x-xpixmap;'
 require_content usr/local/share/applications/x-chip-image.desktop 'Icon=image-x-generic'
 require_content usr/local/share/applications/x-chip-video.desktop 'MimeType=video/mp4;video/x-m4v;video/x-msvideo;video/quicktime;video/x-matroska;video/webm;video/mpeg;'
+require_content usr/local/share/applications/x-chip-video.desktop 'aterm -title Video -e x-chip-video play %f'
 require_content usr/local/share/applications/x-chip-video.desktop 'Icon=video-x-generic'
-require_content usr/local/share/applications/x-chip-music.desktop 'x-chip-music play-bg %f'
+require_content usr/local/share/applications/x-chip-music.desktop 'aterm -title Music -e x-chip-term-hold x-chip-music play %f'
 require_content usr/local/share/applications/x-chip-music.desktop 'Icon=audio-x-generic'
 require_content usr/local/share/applications/x-chip-pdf.desktop 'MimeType=application/pdf;'
 require_content usr/local/share/applications/x-chip-pdf.desktop 'Icon=application-pdf'
@@ -774,6 +786,7 @@ require_content usr/local/share/applications/mimeapps.list 'application/pdf=x-ch
 require_content usr/local/share/x-chip/xorg/mc-media.ext.ini 'x-chip media handlers'
 require_content usr/local/share/x-chip/xorg/mc-media.ext.ini 'x-chip-open-pdf "$MC_EXT_FILENAME"'
 require_nonempty home/$SSH_USER/Pictures/red-hood-field.jpeg
+require_nonempty home/$SSH_USER/Videos/pocket-video-demo.mp4
 require_nonempty home/$SSH_USER/Videos/night-lamp-dream.mp4
 require_nonempty home/$SSH_USER/Music/dreamscape-sample.mp3
 require_content usr/local/bin/x-chip-tic80 'tce-load -il /tce/optional/tic80.tcz'

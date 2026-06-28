@@ -1294,10 +1294,16 @@ open_one() {
 			exec x-chip-open-image "$target"
 			;;
 		*.mp4|*.m4v|*.avi|*.mov|*.mkv|*.webm|*.mpg|*.mpeg)
+			if command -v aterm >/dev/null 2>&1 && [ ! -t 0 ]; then
+				exec aterm -title Video -e x-chip-video play "$target"
+			fi
 			exec x-chip-video play "$target"
 			;;
 		*.mp3)
-			exec x-chip-music play-bg "$target"
+			if command -v aterm >/dev/null 2>&1 && [ ! -t 0 ]; then
+				exec aterm -title Music -e x-chip-term-hold x-chip-music play "$target"
+			fi
+			exec x-chip-music play "$target"
 			;;
 		*.pdf)
 			exec x-chip-open-pdf "$target"
@@ -1334,7 +1340,7 @@ PID_FILE=/tmp/x-chip-music.pid
 LOG_FILE=/tmp/x-chip-music.log
 
 load_media() {
-	x-chip-media-on >/tmp/x-chip-media-on.log 2>&1 || {
+	x-chip-media-on mpg123 >/tmp/x-chip-media-on.log 2>&1 || {
 		cat /tmp/x-chip-media-on.log >&2 2>/dev/null || true
 		return 1
 	}
@@ -1366,6 +1372,7 @@ play_file() {
 		echo "Not a file: $file" >&2
 		return 1
 	}
+	pkill -x ffplay 2>/dev/null || killall ffplay 2>/dev/null || true
 	load_media
 	mpg123 -C "$file"
 }
@@ -1377,6 +1384,7 @@ play_background() {
 		return 1
 	}
 	load_media
+	pkill -x ffplay 2>/dev/null || killall ffplay 2>/dev/null || true
 	pkill -x mpg123 2>/dev/null || killall mpg123 2>/dev/null || true
 	nohup mpg123 "$file" >"$LOG_FILE" 2>&1 &
 	echo "$!" >"$PID_FILE"
@@ -1432,7 +1440,7 @@ SDL_RENDER_DRIVER=${SDL_RENDER_DRIVER:-software}
 export SDL_RENDER_DRIVER
 
 load_media() {
-	x-chip-media-on >/tmp/x-chip-media-on.log 2>&1 || {
+	x-chip-media-on ffmpeg >/tmp/x-chip-media-on.log 2>&1 || {
 		cat /tmp/x-chip-media-on.log >&2 2>/dev/null || true
 		return 1
 	}
@@ -1443,18 +1451,22 @@ load_media() {
 }
 
 list_videos() {
-	for dir in "$HOME_DIR/Videos" "$HOME_DIR/Downloads" "$HOME_DIR"; do
-		[ -d "$dir" ] || continue
-		find "$dir" -maxdepth 2 -type f \( \
-			-name '*.mp4' -o -name '*.MP4' -o \
-			-name '*.m4v' -o -name '*.M4V' -o \
-			-name '*.avi' -o -name '*.AVI' -o \
-			-name '*.mov' -o -name '*.MOV' -o \
-			-name '*.mkv' -o -name '*.MKV' -o \
-			-name '*.webm' -o -name '*.WEBM' -o \
-			-name '*.mpg' -o -name '*.MPG' -o \
-			-name '*.mpeg' -o -name '*.MPEG' \) 2>/dev/null
-	done | awk '!seen[$0]++'
+	{
+		default_video="$HOME_DIR/Videos/pocket-video-demo.mp4"
+		[ -f "$default_video" ] && printf '%s\n' "$default_video"
+		for dir in "$HOME_DIR/Videos" "$HOME_DIR/Downloads" "$HOME_DIR"; do
+			[ -d "$dir" ] || continue
+			find "$dir" -maxdepth 2 -type f \( \
+				-name '*.mp4' -o -name '*.MP4' -o \
+				-name '*.m4v' -o -name '*.M4V' -o \
+				-name '*.avi' -o -name '*.AVI' -o \
+				-name '*.mov' -o -name '*.MOV' -o \
+				-name '*.mkv' -o -name '*.MKV' -o \
+				-name '*.webm' -o -name '*.WEBM' -o \
+				-name '*.mpg' -o -name '*.MPG' -o \
+				-name '*.mpeg' -o -name '*.MPEG' \) 2>/dev/null
+		done
+	} | awk '!seen[$0]++'
 }
 
 status() {
@@ -1472,6 +1484,7 @@ play_file() {
 		return 1
 	}
 	load_media
+	pkill -x mpg123 2>/dev/null || killall mpg123 2>/dev/null || true
 	DISPLAY="$DISPLAY" SDL_RENDER_DRIVER="$SDL_RENDER_DRIVER" \
 		ffplay -autoexit -window_title "Video" -x 474 -y 212 "$file"
 }
@@ -2846,6 +2859,8 @@ install_media_tools() {
         "$RFS/home/$SSH_USER/Games/GameBoy"
     need_root install -m 0644 config/sample-media/Pictures/red-hood-field.jpeg \
         "$RFS/home/$SSH_USER/Pictures/red-hood-field.jpeg"
+    need_root install -m 0644 config/sample-media/Videos/pocket-video-demo.mp4 \
+        "$RFS/home/$SSH_USER/Videos/pocket-video-demo.mp4"
     need_root install -m 0644 config/sample-media/Videos/night-lamp-dream.mp4 \
         "$RFS/home/$SSH_USER/Videos/night-lamp-dream.mp4"
     need_root install -m 0644 config/sample-media/Music/dreamscape-sample.mp3 \
@@ -2878,6 +2893,7 @@ install_media_tools() {
         "$RFS/home/$SSH_USER/Games" "$RFS/home/$SSH_USER/Games/GameBoy"
     need_root chown "$SSH_UID:$SSH_GID" \
         "$RFS/home/$SSH_USER/Pictures/red-hood-field.jpeg" \
+        "$RFS/home/$SSH_USER/Videos/pocket-video-demo.mp4" \
         "$RFS/home/$SSH_USER/Videos/night-lamp-dream.mp4" \
         "$RFS/home/$SSH_USER/Music/dreamscape-sample.mp3"
     if [ "${INCLUDE_PRIVATE_ROMS:-0}" = 1 ]; then
@@ -2889,6 +2905,7 @@ set -eu
 
 MEDIA_LIST=/tce/media.lst
 TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
+LOCK_DIR=/tmp/x-chip-media-on.lock
 
 scrub_kernel_placeholder_deps() {
 	for depfile in /tce/optional/*.tcz.dep; do
@@ -2901,6 +2918,22 @@ scrub_kernel_placeholder_deps() {
 	done
 }
 
+extension_ready() {
+	ext="$1"
+	app="${ext%.tcz}"
+	case "$app" in
+		ffmpeg)
+			command -v ffplay >/dev/null 2>&1
+			;;
+		mpg123)
+			command -v mpg123 >/dev/null 2>&1
+			;;
+		*)
+			[ -e "/usr/local/tce.installed/$app" ]
+			;;
+	esac
+}
+
 load_tcz_one() {
 	ext="$1"
 	case "$ext" in
@@ -2910,6 +2943,7 @@ load_tcz_one() {
 		*.tcz) ;;
 		*) ext="$ext.tcz" ;;
 	esac
+	extension_ready "$ext" && return 0
 	scrub_kernel_placeholder_deps
 	if [ -f "/tce/optional/$ext" ]; then
 		target="/tce/optional/$ext"
@@ -2923,9 +2957,48 @@ load_tcz_one() {
 	fi
 }
 
-[ -f "$MEDIA_LIST" ] || {
-	echo "missing $MEDIA_LIST" >&2
-	exit 1
+commands_ready() {
+	for cmd in "$@"; do
+		command -v "$cmd" >/dev/null 2>&1 || return 1
+	done
+	return 0
+}
+
+require_commands() {
+	missing=0
+	for cmd in "$@"; do
+		if ! command -v "$cmd" >/dev/null 2>&1; then
+			echo "$cmd unavailable" >&2
+			missing=1
+		fi
+	done
+	[ "$missing" = 0 ] || exit 1
+}
+
+load_media_list() {
+	[ -f "$MEDIA_LIST" ] || {
+		echo "missing $MEDIA_LIST" >&2
+		exit 1
+	}
+	while IFS= read -r ext; do
+		ext=${ext%%#*}
+		set -- $ext
+		ext=${1:-}
+		load_tcz_one "$ext"
+	done < "$MEDIA_LIST"
+}
+
+acquire_lock() {
+	waited=0
+	while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+		waited=$((waited + 1))
+		[ "$waited" -lt 90 ] || {
+			echo "media loader is busy" >&2
+			exit 1
+		}
+		sleep 1
+	done
+	trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 }
 
 command -v tce-load >/dev/null 2>&1 || {
@@ -2933,16 +3006,33 @@ command -v tce-load >/dev/null 2>&1 || {
 	exit 1
 }
 
-while IFS= read -r ext; do
-	ext=${ext%%#*}
-	ext=${ext%%[[:space:]]*}
-	load_tcz_one "$ext"
-done < "$MEDIA_LIST"
-
-command -v ffplay >/dev/null 2>&1 || {
-	echo "ffplay unavailable" >&2
-	exit 1
-}
+case "${1:-all}" in
+	all|media)
+		commands_ready ffplay mpg123 && { echo "media ready"; exit 0; }
+		acquire_lock
+		commands_ready ffplay mpg123 && { echo "media ready"; exit 0; }
+		load_media_list
+		require_commands ffplay mpg123
+		;;
+	ffmpeg|ffplay|video)
+		commands_ready ffplay && { echo "media ready"; exit 0; }
+		acquire_lock
+		commands_ready ffplay && { echo "media ready"; exit 0; }
+		load_tcz_one ffmpeg.tcz
+		require_commands ffplay
+		;;
+	mpg123|music|audio)
+		commands_ready mpg123 && { echo "media ready"; exit 0; }
+		acquire_lock
+		commands_ready mpg123 && { echo "media ready"; exit 0; }
+		load_tcz_one mpg123.tcz
+		require_commands mpg123
+		;;
+	*)
+		echo "Usage: x-chip-media-on [all|ffmpeg|mpg123]" >&2
+		exit 2
+		;;
+esac
 
 echo "media ready"
 EOF
@@ -4330,7 +4420,7 @@ EOF
 [Desktop Entry]
 Type=Application
 Name=X-CHIP Video Player
-Exec=x-chip-video play %f
+Exec=aterm -title Video -e x-chip-video play %f
 Icon=video-x-generic
 Terminal=false
 MimeType=video/mp4;video/x-m4v;video/x-msvideo;video/quicktime;video/x-matroska;video/webm;video/mpeg;
@@ -4341,7 +4431,7 @@ EOF
 [Desktop Entry]
 Type=Application
 Name=X-CHIP Music Player
-Exec=x-chip-music play-bg %f
+Exec=aterm -title Music -e x-chip-term-hold x-chip-music play %f
 Icon=audio-x-generic
 Terminal=false
 MimeType=audio/mpeg;audio/mp3;
@@ -5074,7 +5164,7 @@ load_audio_modules() {
 		amixer set Speaker unmute >/dev/null 2>&1 || true
 		amixer set Speaker 80% >/dev/null 2>&1 || true
 		amixer set PCM 80% >/dev/null 2>&1 || true
-		amixer set 'Power Amplifier Mute' off >/dev/null 2>&1 || true
+		amixer set 'Power Amplifier Mute' on >/dev/null 2>&1 || true
 		amixer set 'Power Amplifier Mixer' on >/dev/null 2>&1 || true
 		amixer set 'Power Amplifier DAC' on >/dev/null 2>&1 || true
 		amixer set 'Power Amplifier' 80% >/dev/null 2>&1 || true
@@ -5470,6 +5560,7 @@ for required in \
     ./usr/local/share/applications/mimeinfo.cache \
     ./usr/local/share/mime/mime.cache \
     ./home/$SSH_USER/Pictures/red-hood-field.jpeg \
+    ./home/$SSH_USER/Videos/pocket-video-demo.mp4 \
     ./home/$SSH_USER/Videos/night-lamp-dream.mp4 \
     ./home/$SSH_USER/Music/dreamscape-sample.mp3 \
     ./usr/local/share/x-chip/xorg/icons/menu.xpm \
