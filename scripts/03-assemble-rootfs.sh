@@ -1858,6 +1858,12 @@ command -v goattracker >/dev/null 2>&1 || {
 DISPLAY="$DISPLAY" exec goattracker "$@"
 EOF
 
+    install_text 0644 "$RFS/usr/local/share/x-chip/gameboy-homebrew.tsv" <<'EOF'
+# slug	title	filename	url	sha256	license	source_page
+2048	2048	2048.gb	https://github.com/wyattferguson/2048-gb/releases/download/v1.1/2048.gb	b8b0ab5dc8159dcd83680a2796010ecf9fc8c94c2cfb9cd3ff30c1998d790aa5	MIT	https://github.com/wyattferguson/2048-gb
+ucity	uCity	ucity.gbc	https://github.com/AntonioND/ucity/releases/download/v1.3/ucity.gbc	9422ee2ca7b7ea1d46b58b2a429fff3f354dfd3e732dee1e7ae6220f148ce6e0	GPL-3.0	https://github.com/AntonioND/ucity
+EOF
+
     install_text 0755 "$RFS/usr/local/bin/x-chip-mgba" <<'EOF'
 #!/bin/sh
 set -eu
@@ -1865,8 +1871,13 @@ set -eu
 DISPLAY=${DISPLAY:-:0}
 HOME_DIR=${HOME:-/home/chip}
 ROM_DIR=${X_CHIP_MGBA_ROM_DIR:-$HOME_DIR/Games/GameBoy}
+MANIFEST=${X_CHIP_MGBA_GAMES_MANIFEST:-/usr/local/share/x-chip/gameboy-homebrew.tsv}
 MGBA_CONFIG=${X_CHIP_MGBA_CONFIG:-$HOME_DIR/.config/mgba/config.ini}
 MGBA_POCKET_KEYS=${X_CHIP_MGBA_POCKET_KEYS:-1}
+MGBA_FULLSCREEN=${X_CHIP_MGBA_FULLSCREEN:-1}
+MGBA_WIDTH=${X_CHIP_MGBA_WIDTH:-480}
+MGBA_HEIGHT=${X_CHIP_MGBA_HEIGHT:-272}
+MGBA_LOCK_ASPECT=${X_CHIP_MGBA_LOCK_ASPECT:-0}
 TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
 
 run_tce_load() {
@@ -1912,22 +1923,159 @@ load_app() {
 	}
 }
 
-ensure_mgba_pocket_keys() {
-	[ "$MGBA_POCKET_KEYS" = 1 ] || return 0
+record_for_slug() {
+	slug=$1
+	awk -F '	' -v slug="$slug" 'NF >= 7 && $1 !~ /^#/ && $1 == slug { print; found = 1; exit } END { exit found ? 0 : 1 }' "$MANIFEST"
+}
+
+slug_for_index() {
+	index=$1
+	awk -F '	' -v index="$index" 'NF >= 7 && $1 !~ /^#/ { count++; if (count == index) { print $1; found = 1; exit } } END { exit found ? 0 : 1 }' "$MANIFEST"
+}
+
+field() {
+	printf '%s\n' "$1" | cut -f "$2"
+}
+
+rom_path_for_slug() {
+	record=$(record_for_slug "$1") || return 1
+	file=$(field "$record" 3)
+	printf '%s/%s\n' "$ROM_DIR" "$file"
+}
+
+tls_ready() {
+	for bundle in \
+		/usr/local/etc/pki/certs/ca-bundle.crt \
+		/usr/local/etc/ssl/certs/ca-bundle.crt \
+		/usr/local/etc/ssl/certs/ca-certificates.crt \
+		/etc/ssl/certs/ca-certificates.crt; do
+		[ -s "$bundle" ] && return 0
+	done
+	return 1
+}
+
+verify_sha256() {
+	file=$1
+	expected=$2
+	[ -n "$expected" ] || return 0
+	if ! command -v sha256sum >/dev/null 2>&1; then
+		echo "sha256sum is missing; cannot verify downloaded ROM." >&2
+		return 1
+	fi
+	actual=$(sha256sum "$file" | awk '{ print $1 }')
+	[ "$actual" = "$expected" ] || {
+		echo "SHA-256 mismatch for $file" >&2
+		echo "expected: $expected" >&2
+		echo "actual:   $actual" >&2
+		return 1
+	}
+}
+
+download_url() {
+	url=$1
+	dest=$2
+	sha256=$3
+	tmp="$dest.tmp.$$"
+	rm -f "$tmp"
+	if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+		load_app
+	fi
+	if command -v curl >/dev/null 2>&1; then
+		if ! tls_ready; then
+			echo "TLS certificate bundle is missing; HTTPS downloads cannot be verified." >&2
+			echo "Rebuild/reflash with the current image or run: sudo /usr/local/tce.installed/ca-certificates" >&2
+			return 1
+		fi
+		curl --retry 2 --connect-timeout 20 -fL -o "$tmp" "$url"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -O "$tmp" "$url"
+	else
+		echo "Need curl or wget to download Game Boy homebrew." >&2
+		return 1
+	fi
+	[ -s "$tmp" ] || {
+		rm -f "$tmp"
+		echo "Downloaded ROM is empty." >&2
+		return 1
+	}
+	verify_sha256 "$tmp" "$sha256" || {
+		rm -f "$tmp"
+		return 1
+	}
+	mv "$tmp" "$dest"
+}
+
+install_game() {
+	slug=$1
+	record=$(record_for_slug "$slug") || {
+		echo "Unknown Game Boy homebrew: $slug" >&2
+		return 1
+	}
+	title=$(field "$record" 2)
+	file=$(field "$record" 3)
+	url=$(field "$record" 4)
+	sha256=$(field "$record" 5)
+	license=$(field "$record" 6)
+	page=$(field "$record" 7)
+	case "$file" in
+		*/*|'') echo "Invalid ROM filename in manifest: $file" >&2; return 1 ;;
+	esac
+	mkdir -p "$ROM_DIR"
+	dest="$ROM_DIR/$file"
+	if [ -s "$dest" ]; then
+		if verify_sha256 "$dest" "$sha256"; then
+			echo "$title already installed."
+			return 0
+		fi
+		echo "Replacing corrupt or outdated $dest"
+		rm -f "$dest"
+	fi
+	echo "Downloading $title ($license)"
+	echo "$page"
+	download_url "$url" "$dest" "$sha256"
+	echo "Installed $dest"
+}
+
+install_all() {
+	awk -F '	' 'NF >= 7 && $1 !~ /^#/ { print $1 }' "$MANIFEST" | while IFS= read -r slug; do
+		install_game "$slug"
+	done
+}
+
+list_homebrew() {
+	awk -F '	' 'NF >= 7 && $1 !~ /^#/ { printf "%2d) %s [%s]\n", ++count, $2, $6 }' "$MANIFEST"
+}
+
+ensure_mgba_pocket_config() {
+	[ "$MGBA_POCKET_KEYS" = 1 ] || [ "$MGBA_FULLSCREEN" = 1 ] || return 0
 	mkdir -p "${MGBA_CONFIG%/*}"
 	tmp="$MGBA_CONFIG.tmp.$$"
+	out="$MGBA_CONFIG.new.$$"
 	if [ -f "$MGBA_CONFIG" ]; then
 		awk '
-			BEGIN { in_section = 0 }
-			/^\[gba\.input\.KEY\]$/ { in_section = 1; print; next }
-			/^\[/ { in_section = 0 }
-			in_section && /^keyA=/ { next }
-			in_section && /^keyB=/ { next }
+			BEGIN { in_section = 0; in_input = 0 }
+			/^\[/ { in_section = 1; in_input = 0 }
+			/^\[gba\.input\.KEY\]$/ { in_input = 1; print; next }
+			!in_section && /^(fullscreen|width|height|lockAspectRatio|lockIntegerScaling|resampleVideo)=/ { next }
+			in_input && /^keyA=/ { next }
+			in_input && /^keyB=/ { next }
+			in_input && /^keySelect=/ { next }
+			in_input && /^keyStart=/ { next }
 			{ print }
 		' "$MGBA_CONFIG" >"$tmp"
 	else
 		: >"$tmp"
 	fi
+	{
+		printf 'fullscreen=%s\n' "$MGBA_FULLSCREEN"
+		printf 'width=%s\n' "$MGBA_WIDTH"
+		printf 'height=%s\n' "$MGBA_HEIGHT"
+		printf 'lockAspectRatio=%s\n' "$MGBA_LOCK_ASPECT"
+		printf 'lockIntegerScaling=0\n'
+		printf 'resampleVideo=0\n'
+		cat "$tmp"
+	} >"$out"
+	mv "$out" "$tmp"
 	if ! grep -qxF '[gba.input.KEY]' "$tmp"; then
 		printf '\n[gba.input.KEY]\n' >>"$tmp"
 	fi
@@ -1939,12 +2087,14 @@ ensure_mgba_pocket_keys() {
 				in_section = 1
 				print "keyA=49"
 				print "keyB=50"
+				print "keySelect=8"
+				print "keyStart=13"
 				next
 			}
 			if (in_section && $0 ~ /^\[/) in_section = 0
 		}
 	' "$tmp" >"$MGBA_CONFIG"
-	rm -f "$tmp"
+	rm -f "$tmp" "$out"
 }
 
 list_roms() {
@@ -1965,7 +2115,14 @@ run_mgba() {
 	SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-x11}
 	SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}
 	export DISPLAY SDL_VIDEODRIVER SDL_AUDIODRIVER
-	exec "$cmd" -1 "$@"
+	exec "$cmd" -1 \
+		-C "fullscreen=$MGBA_FULLSCREEN" \
+		-C "width=$MGBA_WIDTH" \
+		-C "height=$MGBA_HEIGHT" \
+		-C "lockAspectRatio=$MGBA_LOCK_ASPECT" \
+		-C "lockIntegerScaling=0" \
+		-C "resampleVideo=0" \
+		"$@"
 }
 
 play_file() {
@@ -1975,8 +2132,26 @@ play_file() {
 		return 1
 	}
 	load_app
-	ensure_mgba_pocket_keys
+	ensure_mgba_pocket_config
 	run_mgba "$file"
+}
+
+play_game() {
+	slug=$1
+	install_game "$slug"
+	rom=$(rom_path_for_slug "$slug")
+	play_file "$rom"
+}
+
+play_target() {
+	target=$1
+	if [ -f "$target" ]; then
+		play_file "$target"
+	elif record_for_slug "$target" >/dev/null 2>&1; then
+		play_game "$target"
+	else
+		play_file "$target"
+	fi
 }
 
 status() {
@@ -1992,61 +2167,104 @@ status() {
 	count=$(list_roms | wc -l | awk '{print $1}')
 	echo "ROMs found: $count"
 	echo
-	echo "ROMs are not included. Put .gb, .gbc, or .gba files in:"
+	echo "Public homebrew:"
+	list_homebrew
+	echo
+	echo "Public homebrew downloads on first launch. You can also put legal .gb, .gbc, or .gba files in:"
 	echo "$ROM_DIR"
 }
 
-case "${1:-menu}" in
-	status) status; exit 0 ;;
-	run) shift; if [ "$#" -gt 0 ]; then play_file "$1"; exit $?; fi ;;
-	play) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-mgba play ROM" >&2; exit 2; }; play_file "$1"; exit $? ;;
-esac
-
-if [ "$#" -gt 0 ] && [ "$1" != menu ]; then
-	play_file "$1"
-	exit $?
-fi
-
-mkdir -p "$ROM_DIR"
-tmp=/tmp/x-chip-mgba-roms.$$
-trap 'rm -f "$tmp"' EXIT
-list_roms >"$tmp"
-if [ ! -s "$tmp" ]; then
-	status
-	echo
-	printf 'ROM path, or q: '
-	read file || exit 0
-	case "$file" in q|Q|'') exit 0 ;; esac
-	play_file "$file"
-	exit $?
-fi
-
-echo "mGBA ROMs:"
-awk '{
-	name = $0
-	sub(".*/", "", name)
-	printf "%2d) %s\n    %s\n", NR, name, $0
-}' "$tmp"
-echo
-printf 'Play number, p for path, or q: '
-read choice || exit 0
-case "$choice" in
-	q|Q|'') exit 0 ;;
-	p|P)
-		printf 'ROM path: '
+browse_local_roms() {
+	mkdir -p "$ROM_DIR"
+	tmp=/tmp/x-chip-mgba-roms.$$
+	trap 'rm -f "$tmp"' EXIT
+	list_roms >"$tmp"
+	if [ ! -s "$tmp" ]; then
+		status
+		echo
+		printf 'ROM path, or q: '
 		read file || exit 0
-		[ -n "$file" ] || exit 0
+		case "$file" in q|Q|'') exit 0 ;; esac
 		play_file "$file"
 		exit $?
-		;;
-	*[!0-9]*) echo "Invalid selection" >&2; exit 2 ;;
-esac
-file=$(sed -n "${choice}p" "$tmp")
-[ -n "$file" ] || {
-	echo "Invalid selection" >&2
-	exit 2
+	fi
+
+	echo "Local mGBA ROMs:"
+	awk '{
+		name = $0
+		sub(".*/", "", name)
+		printf "%2d) %s\n    %s\n", NR, name, $0
+	}' "$tmp"
+	echo
+	printf 'Play number, Enter for first, p for path, or q: '
+	read choice || exit 0
+	case "$choice" in
+		q|Q) exit 0 ;;
+		'') choice=1 ;;
+		p|P)
+			printf 'ROM path: '
+			read file || exit 0
+			[ -n "$file" ] || exit 0
+			play_file "$file"
+			exit $?
+			;;
+		*[!0-9]*) echo "Invalid selection" >&2; exit 2 ;;
+	esac
+	file=$(sed -n "${choice}p" "$tmp")
+	[ -n "$file" ] || {
+		echo "Invalid selection" >&2
+		exit 2
+	}
+	play_file "$file"
 }
-play_file "$file"
+
+pause() {
+	echo
+	echo "Press enter to continue."
+	read _ || true
+}
+
+menu() {
+	while :; do
+		clear 2>/dev/null || true
+		echo "Game Boy Homebrew"
+		echo "================="
+		list_homebrew
+		echo
+		echo "a) Install all homebrew"
+		echo "l) Local ROM browser"
+		echo "s) Status"
+		echo "q) Quit"
+		printf '> '
+		read choice || exit 0
+		case "$choice" in
+			q|Q) exit 0 ;;
+			a|A) install_all; pause ;;
+			l|L) browse_local_roms; pause ;;
+			s|S) status; pause ;;
+			''|*[!0-9]*) echo "Invalid selection"; pause ;;
+			*)
+				slug=$(slug_for_index "$choice") || {
+					echo "Invalid selection"
+					pause
+					continue
+				}
+				play_game "$slug"
+				;;
+		esac
+	done
+}
+
+case "${1:-menu}" in
+	status) status ;;
+	run) shift; if [ "$#" -gt 0 ]; then play_target "$1"; else menu; fi ;;
+	menu) menu ;;
+	list|list-homebrew) list_homebrew ;;
+	install) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-mgba install GAME" >&2; exit 2; }; install_game "$1" ;;
+	install-all) install_all ;;
+	play) shift; [ "$#" -gt 0 ] || { echo "Usage: x-chip-mgba play GAME_OR_ROM" >&2; exit 2; }; play_target "$1" ;;
+	*) play_target "$1" ;;
+esac
 EOF
 
     install_text 0755 "$RFS/usr/local/bin/x-chip-pico8" <<'EOF'
@@ -4358,6 +4576,8 @@ EOF
       <Program label="Doom" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Doom -e x-chip-term-hold x-chip-doom run</Program>
       <Program label="Game Boy Launcher" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GameBoy -e x-chip-mgba</Program>
       <Program label="Game Boy Status" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title mGBA -e x-chip-term-hold x-chip-mgba status</Program>
+      <Program label="2048 GB" icon="pocket.xpm">x-chip-game-launch x-chip-mgba play 2048</Program>
+      <Program label="uCity" icon="pocket.xpm">x-chip-game-launch x-chip-mgba play ucity</Program>
       <Program label="PICO-8" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title PICO-8 -e x-chip-pico8 menu</Program>
       <Program label="TIC-80" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 run</Program>
       <Program label="TIC-80 Manager" icon="apps.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title TIC-80 -e x-chip-tic80 menu</Program>
@@ -5802,6 +6022,7 @@ EOF
         "usr/local/share/x-chip/xorg" \
         "usr/local/share/applications" \
         "usr/local/share/x-chip/tic80-carts.tsv" \
+        "usr/local/share/x-chip/gameboy-homebrew.tsv" \
         "usr/local/share/x-chip/xorg/touchscreen-calibration.matrix" \
         "usr/local/sbin/x-chip-rtl8812au-hotplug" \
         "opt/x-chip-boot.sh" \
@@ -5911,6 +6132,7 @@ for required in \
     ./usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf \
     ./etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf \
     ./usr/local/share/x-chip/tic80-carts.tsv \
+    ./usr/local/share/x-chip/gameboy-homebrew.tsv \
     ./usr/local/share/x-chip/xorg/touchscreen-calibration.matrix \
     ./usr/local/share/x-chip/xorg/jwmrc \
     ./usr/local/share/x-chip/xorg/mc.ini \

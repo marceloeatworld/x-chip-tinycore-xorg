@@ -267,14 +267,25 @@ Game Boy, or Doom.
 The TIC-80 menu includes a curated top-rated game list. The image does not
 redistribute `.tic` cartridges; `x-chip-tic80` downloads each cart from
 `tic80.com` on first launch and stores it under `~/TIC-80/carts`.
-TIC-80 and mGBA use the same PocketCHIP game controls: arrow keys for movement,
-`1` for button A, and `2` for button B. For mGBA, `Enter` is Start and
-`Backspace` is Select. The PocketCHIP Home/Power key closes running games.
+mGBA includes a small public homebrew list. The public image does not bundle
+Game Boy ROMs; `x-chip-mgba` downloads verified homebrew ROMs on first launch
+and stores them under `~/Games/GameBoy`. The current list includes `2048`
+(MIT) and `uCity` (GPL-3.0).
+
+PocketCHIP game controls:
+
+- Arrow keys = direction
+- `1` = A
+- `2` = B
+- `Enter` = Start
+- `Backspace` = Select
+
+The PocketCHIP Home/Power key closes running games.
 `doom.tcz` includes Freedoom Phase 1, which is a free replacement IWAD; commercial
 Doom WAD files are not bundled. The Doom launcher defaults to silent audio on
 PocketCHIP because SDL audio can block startup on this hardware; set
 `X_CHIP_DOOM_SOUND=1` before launching to test audio.
-mGBA does not include ROMs; put legal `.gb`, `.gbc`, or `.gba` files in
+mGBA can also run your own legal `.gb`, `.gbc`, or `.gba` files from
 `~/Games/GameBoy` or `~/Downloads`.
 For PICO-8, install your licensed Linux ARM files under `~/pico-8/pico8`,
 `~/pico8/pico8`, `/opt/pico-8/pico8`, or set `X_CHIP_PICO8_BIN`.

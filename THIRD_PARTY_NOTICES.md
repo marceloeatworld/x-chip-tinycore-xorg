@@ -41,10 +41,20 @@ URLs. Cartridge files are not vendored in this repository and should not be
 redistributed in public release assets without permission from the cartridge
 authors.
 
-Game Boy, Game Boy Color, and Game Boy Advance ROM files are not bundled and
-must not be redistributed in public release assets unless the distributor has
-the rights to do so. Commercial Doom WAD files are not bundled either; the Doom
-launcher uses the free Freedoom Phase 1 IWAD from `doom.tcz`.
+The Game Boy menu ships only a small manifest of public homebrew ROM URLs.
+ROM files are not vendored in this repository or bundled in the public image;
+`x-chip-mgba` downloads them on first launch and verifies SHA-256 checksums.
+The current manifest references:
+
+- `2048` from `https://github.com/wyattferguson/2048-gb`.
+  License: MIT, as provided by the upstream source tree.
+- `uCity` from `https://github.com/AntonioND/ucity`.
+  License: GPL-3.0, as provided by the upstream source tree.
+
+Other Game Boy, Game Boy Color, and Game Boy Advance ROM files must not be
+redistributed in public release assets unless the distributor has the rights to
+do so. Commercial Doom WAD files are not bundled either; the Doom launcher uses
+the free Freedoom Phase 1 IWAD from `doom.tcz`.
 
 ## Firmware
 

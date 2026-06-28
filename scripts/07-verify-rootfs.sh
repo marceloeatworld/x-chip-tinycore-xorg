@@ -401,6 +401,7 @@ for required in \
     usr/local/share/x-chip/xorg/gtk3-settings.ini \
     usr/local/share/x-chip/xorg/Xdefaults \
     usr/local/share/x-chip/tic80-carts.tsv \
+    usr/local/share/x-chip/gameboy-homebrew.tsv \
     usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example \
     usr/local/etc/ssh/sshd_config \
     home/$SSH_USER/Pictures \
@@ -546,6 +547,7 @@ for root_owned in \
     usr/local/share/applications/mimeinfo.cache \
     usr/local/share/mime/mime.cache \
     usr/local/share/x-chip/tic80-carts.tsv \
+    usr/local/share/x-chip/gameboy-homebrew.tsv \
     usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example; do
     require_owner "$root_owned" "0/0"
 done
@@ -855,15 +857,37 @@ require_content usr/local/bin/x-chip-goattracker 'su "$TC_USER" -c "tce-load -il
 require_content usr/local/bin/x-chip-mgba 'run_tce_load /tce/optional/mgba.tcz'
 require_content usr/local/bin/x-chip-mgba 'su "$TC_USER" -c "tce-load -il $target"'
 require_content usr/local/bin/x-chip-mgba 'Games/GameBoy'
+require_content usr/local/bin/x-chip-mgba 'gameboy-homebrew.tsv'
 require_content usr/local/bin/x-chip-mgba 'mgba-sdl1'
 require_content usr/local/bin/x-chip-mgba 'MGBA_POCKET_KEYS'
-require_content usr/local/bin/x-chip-mgba 'ensure_mgba_pocket_keys'
+require_content usr/local/bin/x-chip-mgba 'MGBA_FULLSCREEN=${X_CHIP_MGBA_FULLSCREEN:-1}'
+require_content usr/local/bin/x-chip-mgba 'MGBA_WIDTH=${X_CHIP_MGBA_WIDTH:-480}'
+require_content usr/local/bin/x-chip-mgba 'MGBA_HEIGHT=${X_CHIP_MGBA_HEIGHT:-272}'
+require_content usr/local/bin/x-chip-mgba 'MGBA_LOCK_ASPECT=${X_CHIP_MGBA_LOCK_ASPECT:-0}'
+require_content usr/local/bin/x-chip-mgba 'ensure_mgba_pocket_config'
+require_content usr/local/bin/x-chip-mgba 'fullscreen=%s'
+require_content usr/local/bin/x-chip-mgba 'lockAspectRatio=%s'
+require_content usr/local/bin/x-chip-mgba 'lockIntegerScaling=0'
 require_content usr/local/bin/x-chip-mgba '[gba.input.KEY]'
 require_content usr/local/bin/x-chip-mgba 'keyA=49'
 require_content usr/local/bin/x-chip-mgba 'keyB=50'
+require_content usr/local/bin/x-chip-mgba 'keySelect=8'
+require_content usr/local/bin/x-chip-mgba 'keyStart=13'
 require_content usr/local/bin/x-chip-mgba 'SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-x11}'
 require_content usr/local/bin/x-chip-mgba 'SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}'
-require_content usr/local/bin/x-chip-mgba 'exec "$cmd" -1 "$@"'
+require_content usr/local/bin/x-chip-mgba '-C "width=$MGBA_WIDTH"'
+require_content usr/local/bin/x-chip-mgba '-C "height=$MGBA_HEIGHT"'
+require_content usr/local/bin/x-chip-mgba '-C "lockAspectRatio=$MGBA_LOCK_ASPECT"'
+require_content usr/local/bin/x-chip-mgba 'verify_sha256'
+require_content usr/local/bin/x-chip-mgba 'sha256sum "$file"'
+require_content usr/local/bin/x-chip-mgba 'install_all'
+require_content usr/local/bin/x-chip-mgba 'play_target'
+require_content usr/local/share/x-chip/gameboy-homebrew.tsv '2048'
+require_content usr/local/share/x-chip/gameboy-homebrew.tsv 'https://github.com/wyattferguson/2048-gb/releases/download/v1.1/2048.gb'
+require_content usr/local/share/x-chip/gameboy-homebrew.tsv 'b8b0ab5dc8159dcd83680a2796010ecf9fc8c94c2cfb9cd3ff30c1998d790aa5'
+require_content usr/local/share/x-chip/gameboy-homebrew.tsv 'ucity'
+require_content usr/local/share/x-chip/gameboy-homebrew.tsv 'https://github.com/AntonioND/ucity/releases/download/v1.3/ucity.gbc'
+require_content usr/local/share/x-chip/gameboy-homebrew.tsv '9422ee2ca7b7ea1d46b58b2a429fff3f354dfd3e732dee1e7ae6220f148ce6e0'
 grep -F -- 'SDL_SCANCODE_1' scripts/09-build-community-tcz.sh >/dev/null || {
     echo "ERROR: scripts/09-build-community-tcz.sh no longer maps TIC-80 A to 1" >&2
     exit 1
@@ -958,6 +982,7 @@ require_content opt/.filetool.lst 'usr/local/bin/x-chip-close-app'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-close-game'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-game-launch'
 require_content opt/.filetool.lst 'usr/local/share/x-chip/tic80-carts.tsv'
+require_content opt/.filetool.lst 'usr/local/share/x-chip/gameboy-homebrew.tsv'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'Driver "fbdev"'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'AutoBindGPU'
 require_content usr/local/etc/X11/xorg.conf.d/20-pocketchip-fbdev.conf 'MatchProduct "1c25000.rtp"'
@@ -991,6 +1016,8 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'label="Doom" icon="pocket.xpm
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-doom run'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Game Boy Launcher" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-mgba'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-game-launch x-chip-mgba play 2048'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-game-launch x-chip-mgba play ucity'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="PICO-8" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-pico8 menu'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-games'

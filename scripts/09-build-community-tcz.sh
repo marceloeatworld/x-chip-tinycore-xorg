@@ -330,6 +330,164 @@ build_mgba() {
     # Match the PocketCHIP game controls used by TIC-80: arrows, 1=A, 2=B.
     perl -0pi -e 's/SDLK_x, GBA_KEY_A/SDLK_1, GBA_KEY_A/g; s/SDLK_z, GBA_KEY_B/SDLK_2, GBA_KEY_B/g' \
         "$src/src/platform/sdl/sdl-events.c"
+    # SDL 1.2 software output otherwise draws the native Game Boy/GBA
+    # framebuffer at 0,0 when fullscreen is larger than the game viewport.
+    # Scale to the largest aspect-correct rectangle and center it.
+    cat >"$src/src/platform/sdl/sw-sdl1.c" <<'EOF'
+/* Copyright (c) 2013-2015 Jeffrey Pfau
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+#include "main.h"
+
+#include <mgba/core/core.h>
+#include <mgba/core/thread.h>
+#include <mgba/core/version.h>
+
+#include <string.h>
+
+static bool mSDLSWInit(struct mSDLRenderer* renderer);
+static void mSDLSWRunloop(struct mSDLRenderer* renderer, void* user);
+static void mSDLSWDeinit(struct mSDLRenderer* renderer);
+
+#ifdef USE_PIXMAN
+static void mSDLSWGetDrawRect(struct mSDLRenderer* renderer, unsigned width, unsigned height,
+    int* drawX, int* drawY, int* drawWidth, int* drawHeight) {
+	*drawX = 0;
+	*drawY = 0;
+	*drawWidth = renderer->viewportWidth;
+	*drawHeight = renderer->viewportHeight;
+
+	if (!renderer->lockAspectRatio || !width || !height || renderer->viewportWidth <= 0 || renderer->viewportHeight <= 0) {
+		return;
+	}
+
+	if (renderer->lockIntegerScaling) {
+		unsigned scaleX = renderer->viewportWidth / width;
+		unsigned scaleY = renderer->viewportHeight / height;
+		unsigned scale = scaleX < scaleY ? scaleX : scaleY;
+		if (scale < 1) {
+			scale = 1;
+		}
+		*drawWidth = width * scale;
+		*drawHeight = height * scale;
+	} else if ((uint64_t) renderer->viewportWidth * height > (uint64_t) renderer->viewportHeight * width) {
+		*drawHeight = renderer->viewportHeight;
+		*drawWidth = ((uint64_t) renderer->viewportHeight * width) / height;
+	} else {
+		*drawWidth = renderer->viewportWidth;
+		*drawHeight = ((uint64_t) renderer->viewportWidth * height) / width;
+	}
+
+	*drawX = (renderer->viewportWidth - *drawWidth) / 2;
+	*drawY = (renderer->viewportHeight - *drawHeight) / 2;
+}
+#endif
+
+void mSDLSWCreate(struct mSDLRenderer* renderer) {
+	renderer->init = mSDLSWInit;
+	renderer->deinit = mSDLSWDeinit;
+	renderer->runloop = mSDLSWRunloop;
+}
+
+bool mSDLSWInit(struct mSDLRenderer* renderer) {
+	unsigned width, height;
+	renderer->core->desiredVideoDimensions(renderer->core, &width, &height);
+	renderer->viewportWidth = 480;
+	renderer->viewportHeight = 272;
+	renderer->player.fullscreen = true;
+#ifdef COLOR_16_BIT
+	SDL_SetVideoMode(renderer->viewportWidth, renderer->viewportHeight, 16, SDL_SWSURFACE | (SDL_FULLSCREEN * renderer->player.fullscreen));
+#else
+	SDL_SetVideoMode(renderer->viewportWidth, renderer->viewportHeight, 32, SDL_SWSURFACE | (SDL_FULLSCREEN * renderer->player.fullscreen));
+#endif
+	SDL_WM_SetCaption(projectName, "");
+
+	SDL_Surface* surface = SDL_GetVideoSurface();
+	SDL_LockSurface(surface);
+
+	if (renderer->ratio == 1 && width == (unsigned) renderer->viewportWidth && height == (unsigned) renderer->viewportHeight) {
+		renderer->core->setVideoBuffer(renderer->core, surface->pixels, surface->pitch / BYTES_PER_PIXEL);
+	} else {
+#ifdef USE_PIXMAN
+		renderer->outputBuffer = malloc(width * height * BYTES_PER_PIXEL);
+		renderer->core->setVideoBuffer(renderer->core, renderer->outputBuffer, width);
+#ifdef COLOR_16_BIT
+#ifdef COLOR_5_6_5
+		pixman_format_code_t format = PIXMAN_r5g6b5;
+#else
+		pixman_format_code_t format = PIXMAN_x1b5g5r5;
+#endif
+#else
+		pixman_format_code_t format = PIXMAN_x8b8g8r8;
+#endif
+		renderer->pix = pixman_image_create_bits(format, width, height,
+		    renderer->outputBuffer, width * BYTES_PER_PIXEL);
+		renderer->screenpix = pixman_image_create_bits(format, renderer->viewportWidth, renderer->viewportHeight, surface->pixels, surface->pitch);
+
+		pixman_image_set_filter(renderer->pix, PIXMAN_FILTER_NEAREST, 0, 0);
+#else
+		return false;
+#endif
+	}
+
+	return true;
+}
+
+void mSDLSWRunloop(struct mSDLRenderer* renderer, void* user) {
+	struct mCoreThread* context = user;
+	SDL_Event event;
+	SDL_Surface* surface = SDL_GetVideoSurface();
+
+	while (mCoreThreadIsActive(context)) {
+		while (SDL_PollEvent(&event)) {
+			mSDLHandleEvent(context, &renderer->player, &event);
+		}
+
+		if (mCoreSyncWaitFrameStart(&context->impl->sync)) {
+#ifdef USE_PIXMAN
+			if (renderer->outputBuffer) {
+				unsigned width, height;
+				int drawX, drawY, drawWidth, drawHeight;
+				renderer->core->desiredVideoDimensions(renderer->core, &width, &height);
+				mSDLSWGetDrawRect(renderer, width, height, &drawX, &drawY, &drawWidth, &drawHeight);
+				memset(surface->pixels, 0, surface->pitch * renderer->viewportHeight);
+				for (int dy = 0; dy < drawHeight; ++dy) {
+					unsigned sy = ((uint64_t) dy * height) / drawHeight;
+					color_t* src = &renderer->outputBuffer[sy * width];
+					color_t* dst = (color_t*) ((uint8_t*) surface->pixels + (drawY + dy) * surface->pitch) + drawX;
+					for (int dx = 0; dx < drawWidth; ++dx) {
+						unsigned sx = ((uint64_t) dx * width) / drawWidth;
+						dst[dx] = src[sx];
+					}
+				}
+			}
+#else
+			if (renderer->ratio != 1) {
+				abort();
+			}
+#endif
+			SDL_UnlockSurface(surface);
+			SDL_Flip(surface);
+			SDL_LockSurface(surface);
+		}
+		mCoreSyncWaitFrameEnd(&context->impl->sync);
+	}
+}
+
+void mSDLSWDeinit(struct mSDLRenderer* renderer) {
+	if (renderer->outputBuffer) {
+		free(renderer->outputBuffer);
+#ifdef USE_PIXMAN
+		pixman_image_unref(renderer->pix);
+		pixman_image_unref(renderer->screenpix);
+#endif
+	}
+	SDL_Surface* surface = SDL_GetVideoSurface();
+	SDL_UnlockSurface(surface);
+}
+EOF
 
     local toolchain="$work/armhf-toolchain.cmake"
     write_armhf_toolchain "$toolchain"
