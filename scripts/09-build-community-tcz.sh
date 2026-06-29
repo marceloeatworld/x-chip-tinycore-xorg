@@ -44,7 +44,7 @@ JOBS=${JOBS:-$(nproc)}
 
 apps=("$@")
 if [ "${#apps[@]}" = 0 ]; then
-    apps=(goattracker sunvox virtual-ans pixitracker pixitracker-1bit pixilang tic80 mgba doom)
+    apps=(goattracker sunvox pixitracker pixitracker-1bit pixilang tic80 mgba doom)
 fi
 
 apt_updated=0
@@ -290,6 +290,12 @@ write_boot_pixicode_wrapper() {
 set -eu
 
 APP_DIR=$app_dir
+CONFIG_HOME=\${XDG_CONFIG_HOME:-\${HOME:-/home/chip}/.config}
+CONFIG_DIR=\$CONFIG_HOME/Pixilang
+if [ -f "\$APP_DIR/bin/pixilang_config.ini" ]; then
+	mkdir -p "\$CONFIG_DIR"
+	cp "\$APP_DIR/bin/pixilang_config.ini" "\$CONFIG_DIR/pixilang_config.ini" 2>/dev/null || true
+fi
 cd "\$APP_DIR"
 exec "\$APP_DIR/bin/pixilang" boot.pixicode "\$@"
 EOF
@@ -355,7 +361,7 @@ build_warmplace_boot_pixicode_app() {
         "$app_root/bin/pixilang_linux_x86_64"
     install -m0755 "$src/bin/pixilang_linux_arm_armhf" "$app_root/bin/pixilang"
     rm -f "$app_root/bin/pixilang_linux_arm_armhf"
-    write_pocket_pixilang_config "$app_root/pixilang_config.ini" "$window_name" "$extra_config"
+    write_pocket_pixilang_config "$app_root/bin/pixilang_config.ini" "$window_name" "$extra_config"
     [ -d "$app_root/docs" ] && cp -a "$app_root/docs/." "$pkg/usr/local/share/doc/$name/"
     find "$app_root" "$pkg/usr/local/share/doc/$name" -type d -exec chmod 0755 {} +
     find "$app_root" "$pkg/usr/local/share/doc/$name" -type f -exec chmod 0644 {} +
@@ -443,7 +449,7 @@ build_pixilang() {
     mkdir -p "$pkg/usr/local/bin" "$app_root/bin" "$pkg/usr/local/share/doc/pixilang"
     install -m0755 "$src/bin/linux_arm/pixilang_no_opengl" "$app_root/bin/pixilang"
     cp -a "$src/docs" "$src/examples" "$src/lib" "$app_root/"
-    write_pocket_pixilang_config "$app_root/pixilang_config.ini" "Pixilang"
+    write_pocket_pixilang_config "$app_root/bin/pixilang_config.ini" "Pixilang"
     cp -a "$src/docs/." "$pkg/usr/local/share/doc/pixilang/"
     find "$app_root" "$pkg/usr/local/share/doc/pixilang" -type d -exec chmod 0755 {} +
     find "$app_root" "$pkg/usr/local/share/doc/pixilang" -type f -exec chmod 0644 {} +
@@ -454,9 +460,15 @@ build_pixilang() {
 set -eu
 
 PIXILANG_DIR=$app_dir
+CONFIG_HOME=\${XDG_CONFIG_HOME:-\${HOME:-/home/chip}/.config}
+CONFIG_DIR=\$CONFIG_HOME/Pixilang
+if [ -f "\$PIXILANG_DIR/bin/pixilang_config.ini" ]; then
+	mkdir -p "\$CONFIG_DIR"
+	cp "\$PIXILANG_DIR/bin/pixilang_config.ini" "\$CONFIG_DIR/pixilang_config.ini" 2>/dev/null || true
+fi
 if [ "\$#" = 0 ]; then
-	cd "\$PIXILANG_DIR/examples/sound"
-	exec "\$PIXILANG_DIR/bin/pixilang" pixelwave.pixi
+	cd "\$PIXILANG_DIR/examples/graphics"
+	exec "\$PIXILANG_DIR/bin/pixilang" generator_plasma.pixi
 fi
 exec "\$PIXILANG_DIR/bin/pixilang" "\$@"
 EOF
@@ -982,7 +994,7 @@ for app in "${apps[@]}"; do
         tic80) build_tic80 ;;
         mgba) build_mgba ;;
         doom) build_doom ;;
-        all) build_goattracker; build_sunvox; build_virtual_ans; build_pixitracker; build_pixitracker_1bit; build_pixilang; build_tic80; build_mgba; build_doom ;;
+        all) build_goattracker; build_sunvox; build_pixitracker; build_pixitracker_1bit; build_pixilang; build_tic80; build_mgba; build_doom ;;
         *) echo "ERROR: unknown app '$app' (expected goattracker, sunvox, virtual-ans, pixitracker, pixitracker-1bit, pixilang, tic80, mgba, doom, or all)" >&2; exit 2 ;;
     esac
 done

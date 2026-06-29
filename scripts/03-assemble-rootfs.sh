@@ -2061,6 +2061,18 @@ command -v pixilang >/dev/null 2>&1 || {
 	exit 1
 }
 
+CONFIG_HOME=${XDG_CONFIG_HOME:-${HOME:-/home/chip}/.config}
+CONFIG_DIR=$CONFIG_HOME/Pixilang
+if [ -f /usr/local/lib/pixilang/bin/pixilang_config.ini ]; then
+	mkdir -p "$CONFIG_DIR"
+	cp /usr/local/lib/pixilang/bin/pixilang_config.ini "$CONFIG_DIR/pixilang_config.ini" 2>/dev/null || true
+fi
+
+if [ "$#" = 0 ] && [ -x /usr/local/lib/pixilang/bin/pixilang ] && [ -f /usr/local/lib/pixilang/examples/graphics/generator_plasma.pixi ]; then
+	cd /usr/local/lib/pixilang/examples/graphics
+	DISPLAY="$DISPLAY" exec /usr/local/lib/pixilang/bin/pixilang generator_plasma.pixi
+fi
+
 DISPLAY="$DISPLAY" exec pixilang "$@"
 EOF
 
@@ -4848,7 +4860,6 @@ EOF
       <Program label="Music Player" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Music -e x-chip-music</Program>
       <Separator/>
       <Program label="SunVox" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title SunVox -e x-chip-term-hold x-chip-sunvox</Program>
-      <Program label="Virtual ANS" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title VirtualANS -e x-chip-term-hold x-chip-virtual-ans</Program>
       <Program label="PixiTracker" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title PixiTracker -e x-chip-term-hold x-chip-pixitracker</Program>
       <Program label="PixiTracker 1Bit" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Pixi1Bit -e x-chip-term-hold x-chip-pixitracker-1bit</Program>
       <Program label="Pixilang" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Pixilang -e x-chip-term-hold x-chip-pixilang</Program>
@@ -5438,7 +5449,7 @@ preseed_tcz_extensions() {
             }
             return 0
         fi
-        for app in tic80 goattracker sunvox virtual-ans pixitracker pixitracker-1bit pixilang mgba doom; do
+        for app in tic80 goattracker sunvox pixitracker pixitracker-1bit pixilang mgba doom; do
             if [ ! -s "$src/$app.tcz" ]; then
                 [ "$mode" = 1 ] && {
                     echo "ERROR: missing $src/$app.tcz" >&2
@@ -5536,7 +5547,7 @@ preseed_tcz_extensions() {
         done < tce/xorg.lst
     fi
 
-    for depfile in "$optional/tic80.tcz.dep" "$optional/goattracker.tcz.dep" "$optional/sunvox.tcz.dep" "$optional/virtual-ans.tcz.dep" "$optional/pixitracker.tcz.dep" "$optional/pixitracker-1bit.tcz.dep" "$optional/pixilang.tcz.dep" "$optional/mgba.tcz.dep" "$optional/doom.tcz.dep"; do
+    for depfile in "$optional/tic80.tcz.dep" "$optional/goattracker.tcz.dep" "$optional/sunvox.tcz.dep" "$optional/pixitracker.tcz.dep" "$optional/pixitracker-1bit.tcz.dep" "$optional/pixilang.tcz.dep" "$optional/mgba.tcz.dep" "$optional/doom.tcz.dep"; do
         [ -s "$depfile" ] || continue
         while IFS= read -r ext; do
             download_tcz "$ext"

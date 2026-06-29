@@ -881,6 +881,9 @@ require_content usr/local/bin/x-chip-pixitracker 'exec pixitracker "$@"'
 require_content usr/local/bin/x-chip-pixitracker-1bit 'run_tce_load /tce/optional/pixitracker-1bit.tcz'
 require_content usr/local/bin/x-chip-pixitracker-1bit 'exec pixitracker-1bit "$@"'
 require_content usr/local/bin/x-chip-pixilang 'run_tce_load /tce/optional/pixilang.tcz'
+require_content usr/local/bin/x-chip-pixilang 'CONFIG_DIR=$CONFIG_HOME/Pixilang'
+require_content usr/local/bin/x-chip-pixilang 'cp /usr/local/lib/pixilang/bin/pixilang_config.ini "$CONFIG_DIR/pixilang_config.ini"'
+require_content usr/local/bin/x-chip-pixilang 'generator_plasma.pixi'
 require_content usr/local/bin/x-chip-pixilang 'exec pixilang "$@"'
 require_content usr/local/bin/x-chip-mgba 'run_tce_load /tce/optional/mgba.tcz'
 require_content usr/local/bin/x-chip-mgba 'su "$TC_USER" -c "tce-load -il $target"'
@@ -1066,7 +1069,6 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'label="Images" icon="image.xp
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Music" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Music Player" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="SunVox" icon="pocket.xpm"'
-require_content usr/local/share/x-chip/xorg/jwmrc 'label="Virtual ANS" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="PixiTracker" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="PixiTracker 1Bit" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Pixilang" icon="pocket.xpm"'
@@ -1090,10 +1092,10 @@ reject_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 
 reject_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 play'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-goattracker'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-sunvox'
-require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-virtual-ans'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-pixitracker'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-pixitracker-1bit'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-pixilang'
+reject_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-virtual-ans'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Apps" icon="apps.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Network" icon="network.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Brightness" icon="brightness.xpm"'
@@ -1399,7 +1401,7 @@ if [ "${PRESEED_TCZ:-1}" = 1 ]; then
         require_content "tce/optional/$ext.tcz.dep" 'Xlibs.tcz'
         reject_content tce/onboot.lst "$ext.tcz"
     }
-    for warmplace_ext in virtual-ans pixitracker pixitracker-1bit pixilang; do
+    for warmplace_ext in pixitracker pixitracker-1bit pixilang; do
         if has_entry "tce/optional/$warmplace_ext.tcz"; then
             require_warmplace_music_ext "$warmplace_ext"
         fi

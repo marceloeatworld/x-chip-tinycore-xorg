@@ -291,7 +291,6 @@ or one app at a time:
 ```sh
 ./scripts/09-build-community-tcz.sh goattracker
 ./scripts/09-build-community-tcz.sh sunvox
-./scripts/09-build-community-tcz.sh virtual-ans
 ./scripts/09-build-community-tcz.sh pixitracker
 ./scripts/09-build-community-tcz.sh pixitracker-1bit
 ./scripts/09-build-community-tcz.sh pixilang
@@ -312,8 +311,6 @@ Current optional recipes:
   `goattracker 2.77+ds-1`
 - `sunvox.tcz`: WarmPlace SunVox modular music studio, packaged from the
   official Linux ARM release `2.1.4d`
-- `virtual-ans.tcz`: WarmPlace Virtual ANS spectral synthesizer, packaged from
-  the official Linux ARM release `3.0.4`
 - `pixitracker.tcz`: WarmPlace PixiTracker 16Bit, packaged from the official
   Linux ARM release `1.6.8`
 - `pixitracker-1bit.tcz`: WarmPlace PixiTracker 1Bit, packaged from the
@@ -327,6 +324,12 @@ Current optional recipes:
   with the free Freedoom `0.13.0` Phase 1 IWAD
 - PICO-8 launcher: the image includes a menu wrapper, but does not bundle the
   commercial PICO-8 binary
+
+Virtual ANS is intentionally not built by `make community-tcz` and is not shown
+in the PocketCHIP menu. The manual recipe
+`./scripts/09-build-community-tcz.sh virtual-ans` is kept for experiments, but
+Virtual ANS 3 requires an OpenGL-capable Linux desktop and opens to a black
+window on the PocketCHIP fbdev/Xorg stack.
 
 If `dist/community-tcz/` exists when the rootfs is assembled, the builder caches
 the community apps and their runtime dependencies in `/tce/optional`. They are
@@ -455,8 +458,8 @@ scripts/09-build-community-tcz.sh
   `mpg123.tcz`; it is loaded on demand by `x-chip-media-on` for `ffplay` video
   playback and console MP3 playback, not at boot
 - Optional community app pack: `dist/community-tcz/` can contain games and music
-  tools including TIC-80, GoatTracker, SunVox, Virtual ANS, PixiTracker,
-  PixiTracker 1Bit, Pixilang, mGBA, and Doom; when present during rootfs
+  tools including TIC-80, GoatTracker, SunVox, PixiTracker, PixiTracker 1Bit,
+  Pixilang, mGBA, and Doom; when present during rootfs
   assembly they are cached in `/tce/optional` and launched from the JWM `Music`
   or `Games` menus on demand, not loaded at boot
 - Desktop pack: `/tce/xorg.lst` pre-seeds Xorg, fbdev, flwm/jwm, aterm,
