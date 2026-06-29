@@ -250,18 +250,27 @@ tce-ab
 Check which cached extensions have updates available:
 
 ```sh
-tce-update query /tce/optional
+sudo tce-update query /tce/optional
 ```
 
 Update one cached extension:
 
 ```sh
-tce-update update /tce/optional/nano.tcz
+sudo tce-update update /tce/optional/nano.tcz
 ```
 
-For large batch updates, leave the desktop first and run the TinyCore updater
-from a console. Reboot after updating extensions so the new `.tcz` files are
-loaded cleanly.
+Refresh dependencies and update all cached TinyCore extensions:
+
+```sh
+sudo update-everything
+```
+
+Run full updates from a console, not while using the desktop. Reboot after
+updating extensions so the new `.tcz` files are loaded cleanly. If
+`update-everything` says a local community package such as `doom.tcz`,
+`tic80.tcz`, `goattracker.tcz`, or `mgba.tcz` is deprecated, answer `n` to keep
+it. Those packages are local/community extensions, not official TinyCore repo
+packages.
 
 Rebuild the image only when changing the default shipped system: kernel,
 drivers, desktop defaults, themes, or the default extension lists in `tce/`.
