@@ -64,28 +64,64 @@ Desktop status:
 - the current stable path is fbdev + JWM on VT2; fbturbo is not loaded because
   the available fbturbo module targets an older Xorg video ABI
 
-## Quick Flash
+## Quick Flash From a PC
 
-This erases the PocketCHIP NAND rootfs.
+Most users should flash the ready release image from a Linux PC. This erases
+the PocketCHIP NAND rootfs.
 
-1. Put CHIP/PocketCHIP in FEL mode: connect **FEL** to **GND**.
-2. Plug USB into the Linux flashing machine.
-3. Build or download `xorg-rootfs.tar.gz`.
-4. Flash.
+For this tutorial release, the helper script downloads from:
 
-Local USB flash:
+<https://github.com/marceloeatworld/x-chip-tinycore-xorg/releases/tag/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc-2026-06-29>
 
-```sh
-make flash-local
-```
-
-USB connected to another Linux host over SSH:
+On the Linux PC:
 
 ```sh
-FLASH_HOST=my-linux-host make flash-host
+git clone https://github.com/marceloeatworld/x-chip-tinycore-xorg.git
+cd x-chip-tinycore-xorg
+./scripts/flash-release-pocketchip.sh
 ```
 
-When the script says flash is complete, remove the FEL jumper and reboot.
+The script downloads the release rootfs and `.sha256`, verifies the image, checks
+the flashing commands, downloads `x-chip-tools` and installer files on first
+run, then asks you to type `FLASH` before erasing NAND.
+
+If the PC is missing a system command such as `mkimage`, `sunxi-fel`, or
+`sunxi-nand-image-builder`, the script can offer to install the common
+Debian/Ubuntu packages with `apt-get`. On other distros, it stops and prints the
+missing command names.
+
+To test the download, SHA check, and command detection without writing NAND:
+
+```sh
+./scripts/flash-release-pocketchip.sh --dry-run
+```
+
+To also run the lower-level flasher preflight without writing NAND, use:
+
+```sh
+./scripts/flash-release-pocketchip.sh --preflight
+```
+
+FEL/GND connection:
+
+1. Power the PocketCHIP off.
+2. Find the **FEL** and **GND** pins or pads on the CHIP board.
+3. Put one jumper wire between **FEL** and **GND**. Any **GND** pin is fine.
+4. Keep **FEL** connected to **GND**, then plug the CHIP/PocketCHIP micro-USB
+   cable into the Linux PC.
+5. Run the flash command above.
+6. When the script prints `flash complete`, unplug USB, remove the **FEL** to
+   **GND** jumper, then power on normally.
+
+Do not connect **FEL** to **5V**, **VBAT**, or **3V3**. It only needs to touch
+**GND** while the device starts in FEL flashing mode.
+
+Advanced: if the PocketCHIP USB cable is connected to another Linux host over
+SSH, use the lower-level script with a rootfs file you already downloaded:
+
+```sh
+./scripts/05-flash-via-host.sh --host my-linux-host --rootfs /path/to/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc.rootfs.tar.gz --flash
+```
 
 ## Personal Build
 
@@ -464,6 +500,7 @@ tce/onboot.lst             TinyCore extensions installed at boot
 tce/xorg.lst               Xorg desktop extensions loaded by desktop startup
 scripts/00-fetch-deps.sh   fetch chip-debroot and x-chip-tools
 scripts/03-assemble-rootfs.sh
+scripts/flash-release-pocketchip.sh
 scripts/05-flash-local.sh
 scripts/05-flash-via-host.sh
 scripts/07-verify-rootfs.sh
@@ -552,5 +589,5 @@ x-chip-power-status
 Flash a downloaded tar directly:
 
 ```sh
-./scripts/05-flash-local.sh --rootfs ./xorg-rootfs.tar.gz --flash
+./scripts/05-flash-local.sh --rootfs ~/Downloads/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc.rootfs.tar.gz --flash
 ```
