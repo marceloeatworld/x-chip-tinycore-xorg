@@ -86,9 +86,9 @@ the flashing commands, downloads `x-chip-tools` and installer files on first
 run, then asks you to type `FLASH` before erasing NAND.
 
 If the PC is missing a system command such as `mkimage`, `sunxi-fel`, or
-`sunxi-nand-image-builder`, the script can offer to install the common
-Debian/Ubuntu packages with `apt-get`. On other distros, it stops and prints the
-missing command names.
+`sunxi-nand-image-builder`, the script offers to install the common
+Debian/Ubuntu packages when `apt-get` is available. On other distros, it says
+that automatic install is unavailable and prints the missing command names.
 
 To test the download, SHA check, and command detection without writing NAND:
 

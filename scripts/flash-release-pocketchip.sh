@@ -158,30 +158,50 @@ EOF
 
 install_deps_with_apt() {
     local answer packages
-    need_cmd apt-get || return 1
+    if ! need_cmd apt-get; then
+        echo ">> automatic package install unavailable: apt-get not found" >&2
+        return 1
+    fi
 
     case "$INSTALL_DEPS" in
         yes|true|1)
             ;;
         no|false|0)
+            echo ">> automatic package install disabled by --no-install-deps" >&2
             return 1
             ;;
         *)
-            [ -t 0 ] || return 1
+            if [ ! -t 0 ]; then
+                echo ">> automatic package install skipped: non-interactive shell" >&2
+                echo ">> rerun with --install-deps to allow apt-get package install" >&2
+                return 1
+            fi
             printf 'Install common Debian/Ubuntu flashing packages now? [y/N] '
             read -r answer
             case "$answer" in
                 y|Y|yes|YES) ;;
-                *) return 1 ;;
+                *)
+                    echo ">> package install skipped by user" >&2
+                    return 1
+                    ;;
             esac
             ;;
     esac
 
     packages="git curl ca-certificates openssh-client iproute2 iputils-ping u-boot-tools sunxi-tools"
     echo ">> installing host packages with apt-get"
-    sudo -v
-    sudo apt-get update
-    sudo apt-get install -y $packages
+    if [ "$EUID" -eq 0 ]; then
+        apt-get update
+        apt-get install -y $packages
+    else
+        need_cmd sudo || {
+            echo ">> automatic package install unavailable: sudo not found" >&2
+            return 1
+        }
+        sudo -v
+        sudo apt-get update
+        sudo apt-get install -y $packages
+    fi
 }
 
 require_commands() {
