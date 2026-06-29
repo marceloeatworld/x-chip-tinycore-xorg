@@ -34,6 +34,10 @@ More live views from the same image:
 | --- | --- | --- |
 | <img src="docs/assets/pocket-readme-screen.png" alt="PocketCHIP TinyCore desktop" width="240"> | <img src="docs/assets/pocket-readme-dillo.png" alt="Dillo on PocketCHIP TinyCore" width="240"> | <img src="docs/assets/pocket-readme-game.png" alt="Game menu on PocketCHIP TinyCore" width="240"> |
 
+SunVox running fullscreen from the optional music tools:
+
+<img src="docs/assets/pocket-readme-music.png" alt="SunVox music tool on PocketCHIP TinyCore" width="480">
+
 Doom running fullscreen through Chocolate Doom and Freedoom:
 
 <img src="docs/assets/pocket-readme-doom.png" alt="Doom fullscreen on PocketCHIP TinyCore" width="480">
@@ -311,6 +315,9 @@ dist/community-tcz/
 
 Current optional recipes:
 
+- Music tools: GoatTracker, SunVox, PixiTracker, PixiTracker 1Bit, and
+  Pixilang. These are exposed under the JWM `Music` menu when the community
+  `.tcz` pack is present.
 - `goattracker.tcz`: C64 music editor, built from Debian source
   `goattracker 2.77+ds-1`
 - `sunvox.tcz`: WarmPlace SunVox modular music studio, packaged from the
