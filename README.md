@@ -19,6 +19,21 @@ Target:
 - fbdev default Xorg driver, fixed JWM tray, flwm fallback, aterm, xinput
 - fbturbo sample config kept for later, but not loaded by default
 
+## Live PocketCHIP Preview
+
+These are direct captures from the real PocketCHIP screen, not mockups. The
+first capture shows the current lightweight desktop monitor view: Xorg/JWM,
+SSH/runtime services, and `htop` running on the `480x272` LCD with about 55 MB
+of RAM in use.
+
+![PocketCHIP TinyCore CPU and system monitor](docs/assets/pocket-readme-cpu.png)
+
+More live views from the same image:
+
+| Desktop | Dillo | Games |
+| --- | --- | --- |
+| <img src="docs/assets/pocket-readme-screen.png" alt="PocketCHIP TinyCore desktop" width="240"> | <img src="docs/assets/pocket-readme-dillo.png" alt="Dillo on PocketCHIP TinyCore" width="240"> | <img src="docs/assets/pocket-readme-game.png" alt="Game menu on PocketCHIP TinyCore" width="240"> |
+
 ## Current Status
 
 Base inherited from the working headless PocketCHIP image:
@@ -120,14 +135,6 @@ PCManFM folders/files and the common toolbar actions.
 The default wallpaper is `/usr/local/share/x-chip/xorg/wallpapers/pocket-core.png`,
 a lightweight `480x272` PocketCHIP-specific background built to keep the tray
 and small windows readable.
-
-Live PocketCHIP screenshots:
-
-![PocketCHIP TinyCore desktop](docs/assets/pocket-readme-screen.png)
-
-![Dillo on PocketCHIP TinyCore](docs/assets/pocket-readme-dillo.png)
-
-![Game menu on PocketCHIP TinyCore](docs/assets/pocket-readme-game.png)
 
 Lightweight system controls are built in without NetworkManager or a desktop
 settings daemon:
