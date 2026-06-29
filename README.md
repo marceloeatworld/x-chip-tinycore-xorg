@@ -227,6 +227,45 @@ experiments at:
 /usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example
 ```
 
+## Installing Software After Flash
+
+Users do not need to rebuild the image every time they want another program.
+The running system uses TinyCore extensions (`.tcz`) as its package format.
+
+Install an extension now and keep it across reboots:
+
+```sh
+tce-load -w -i nano.tcz
+```
+
+That downloads the extension into `/tce/optional`, loads it immediately, and
+adds it to `/tce/onboot.lst` so TinyCore loads it again on the next boot.
+
+Browse and install packages interactively:
+
+```sh
+tce-ab
+```
+
+Check which cached extensions have updates available:
+
+```sh
+tce-update query /tce/optional
+```
+
+Update one cached extension:
+
+```sh
+tce-update update /tce/optional/nano.tcz
+```
+
+For large batch updates, leave the desktop first and run the TinyCore updater
+from a console. Reboot after updating extensions so the new `.tcz` files are
+loaded cleanly.
+
+Rebuild the image only when changing the default shipped system: kernel,
+drivers, desktop defaults, themes, or the default extension lists in `tce/`.
+
 ## Optional Community Apps
 
 The base image stays small and does not boot extra game or music software. For
