@@ -904,6 +904,22 @@ grep -F -- 'SDLK_2, GBA_KEY_B' scripts/09-build-community-tcz.sh >/dev/null || {
     echo "ERROR: scripts/09-build-community-tcz.sh no longer maps mGBA B to 2" >&2
     exit 1
 }
+grep -F -- 'case SDLK_HOME:' scripts/09-build-community-tcz.sh >/dev/null || {
+    echo "ERROR: scripts/09-build-community-tcz.sh no longer maps PocketCHIP Home to quit mGBA" >&2
+    exit 1
+}
+grep -F -- 'case SDLK_POWER:' scripts/09-build-community-tcz.sh >/dev/null || {
+    echo "ERROR: scripts/09-build-community-tcz.sh no longer maps PocketCHIP Power to quit mGBA" >&2
+    exit 1
+}
+grep -F -- 'case 124: /* XF86PowerOff */' scripts/09-build-community-tcz.sh >/dev/null || {
+    echo "ERROR: scripts/09-build-community-tcz.sh no longer maps XF86PowerOff scancode to quit mGBA" >&2
+    exit 1
+}
+grep -F -- 'case 180: /* XF86HomePage */' scripts/09-build-community-tcz.sh >/dev/null || {
+    echo "ERROR: scripts/09-build-community-tcz.sh no longer maps XF86HomePage scancode to quit mGBA" >&2
+    exit 1
+}
 require_content usr/local/bin/x-chip-pico8 'PICO-8 is not bundled'
 require_content usr/local/bin/x-chip-pico8 '-windowed 1 -width 480 -height 272'
 require_content usr/local/bin/x-chip-games 'x-chip-mgba menu'

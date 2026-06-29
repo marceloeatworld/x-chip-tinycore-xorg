@@ -351,6 +351,28 @@ static bool mSDLSWInit(struct mSDLRenderer* renderer);
 static void mSDLSWRunloop(struct mSDLRenderer* renderer, void* user);
 static void mSDLSWDeinit(struct mSDLRenderer* renderer);
 
+static bool mSDLSWIsPocketQuitKey(const SDL_Event* event) {
+	if (event->type != SDL_KEYDOWN) {
+		return false;
+	}
+	switch (event->key.keysym.sym) {
+	case SDLK_HOME:
+	case SDLK_POWER:
+		return true;
+	default:
+		break;
+	}
+	/* SDL 1.2 can leave XF86 keys as SDLK_UNKNOWN; keep the X keycodes too. */
+	switch (event->key.keysym.scancode) {
+	case 110: /* Home */
+	case 124: /* XF86PowerOff */
+	case 180: /* XF86HomePage */
+		return true;
+	default:
+		return false;
+	}
+}
+
 #ifdef USE_PIXMAN
 static void mSDLSWGetDrawRect(struct mSDLRenderer* renderer, unsigned width, unsigned height,
     int* drawX, int* drawY, int* drawWidth, int* drawHeight) {
@@ -442,6 +464,10 @@ void mSDLSWRunloop(struct mSDLRenderer* renderer, void* user) {
 
 	while (mCoreThreadIsActive(context)) {
 		while (SDL_PollEvent(&event)) {
+			if (mSDLSWIsPocketQuitKey(&event)) {
+				mCoreThreadEnd(context);
+				continue;
+			}
 			mSDLHandleEvent(context, &renderer->player, &event);
 		}
 
