@@ -193,10 +193,20 @@ done
 require_cmd curl
 
 download_latest_asset() {
-    local repo=$1 pattern=$2 dest=$3 tag=${4:-} expected_sha=${5:-} url name
+    local repo=$1 pattern=$2 dest=$3 tag=${4:-} expected_sha=${5:-} url name actual_sha
     if [ -f "$dest" ]; then
-        verify_sha256 "$dest" "$expected_sha"
-        return 0
+        if [ -n "$expected_sha" ]; then
+            actual_sha=$(sha256sum "$dest" | awk '{ print $1 }')
+            if [ "$actual_sha" = "$expected_sha" ]; then
+                return 0
+            fi
+            echo ">> cached $dest sha256 changed; re-downloading" >&2
+            echo ">> expected: $expected_sha" >&2
+            echo ">> actual:   $actual_sha" >&2
+            rm -f "$dest"
+        else
+            return 0
+        fi
     fi
     mkdir -p "$(dirname "$dest")"
 

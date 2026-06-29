@@ -26,6 +26,7 @@ DOWNLOAD_ONLY=0
 ASSUME_YES=0
 PREFLIGHT=0
 INSTALL_DEPS=${INSTALL_DEPS:-ask}
+REFRESH_FLASH_SHAS=${REFRESH_FLASH_SHAS:-1}
 
 usage() {
     cat <<EOF
@@ -40,6 +41,8 @@ Options:
   --download-only       download and verify the release only
   --install-deps        install missing Debian/Ubuntu host packages with apt
   --no-install-deps     only report missing host commands
+  --no-refresh-flash-shas
+                        use pinned flash helper SHA256 values from config.env
   --yes                 skip the final interactive confirmation
   --tag TAG             GitHub release tag to download
   --repo OWNER/REPO     GitHub repository (default: $RELEASE_REPO)
@@ -50,7 +53,8 @@ Options:
   -h, --help            show this help
 
 Environment overrides use the same names: RELEASE_TAG, RELEASE_REPO,
-DOWNLOAD_DIR, RELEASE_ASSET, RELEASE_SHA_ASSET, INSTALL_DEPS.
+DOWNLOAD_DIR, RELEASE_ASSET, RELEASE_SHA_ASSET, INSTALL_DEPS,
+REFRESH_FLASH_SHAS.
 EOF
 }
 
@@ -71,6 +75,9 @@ while [ "$#" -gt 0 ]; do
             ;;
         --no-install-deps)
             INSTALL_DEPS=no
+            ;;
+        --no-refresh-flash-shas)
+            REFRESH_FLASH_SHAS=0
             ;;
         --yes)
             ASSUME_YES=1
@@ -277,6 +284,50 @@ check_flash_commands() {
     require_commands git curl sha256sum sudo tar ssh ping ip dd mkimage sunxi-fel sunxi-nand-image-builder
 }
 
+github_release_asset_sha256() {
+    local repo=$1 tag=$2 asset=$3
+    curl -fsSL "https://api.github.com/repos/$repo/releases/tags/$tag" \
+        | tr '\n' ' ' \
+        | sed 's/}[[:space:]]*,[[:space:]]*{/\n/g' \
+        | awk -v asset="$asset" '
+            index($0, "\"name\":\"" asset "\"") || index($0, "\"name\": \"" asset "\"") {
+                digest = $0
+                sub(/^.*"digest"[[:space:]]*:[[:space:]]*"sha256:/, "", digest)
+                if (digest != $0) {
+                    sub(/".*$/, "", digest)
+                    if (length(digest) == 64) {
+                        print tolower(digest)
+                        exit
+                    }
+                }
+            }
+        '
+}
+
+export_flash_sha256() {
+    local var=$1 repo=$2 tag=$3 asset=$4 sha
+    sha=$(github_release_asset_sha256 "$repo" "$tag" "$asset" 2>/dev/null || true)
+    if [ -n "$sha" ]; then
+        export "$var=$sha"
+        echo ">> $asset sha256: $sha"
+    else
+        echo ">> could not refresh sha256 for $repo $tag $asset; using config.env fallback" >&2
+    fi
+}
+
+refresh_flash_sha256s() {
+    case "$REFRESH_FLASH_SHAS" in
+        0|no|false) return 0 ;;
+    esac
+    require_commands curl
+    echo ">> refreshing flash helper sha256 values from GitHub"
+    export_flash_sha256 X_CHIP_INITRD_SHA256 nextthingco/x-chip-tools "${X_CHIP_TOOLS_RELEASE_TAG:-}" initrd.uimage
+    export_flash_sha256 X_CHIP_SPL_SHA256 nextthingco/x-chip-uboot "${X_CHIP_UBOOT_RELEASE_TAG:-}" sunxi-spl.bin
+    export_flash_sha256 X_CHIP_UBOOT_DTB_SHA256 nextthingco/x-chip-uboot "${X_CHIP_UBOOT_RELEASE_TAG:-}" u-boot-dtb.bin
+    export_flash_sha256 X_CHIP_UBOOT_WITH_SPL_SHA256 nextthingco/x-chip-uboot "${X_CHIP_UBOOT_RELEASE_TAG:-}" u-boot-sunxi-with-spl.bin
+    export_flash_sha256 X_CHIP_POCKETCHIP_ROOTFS_SHA256 nextthingco/x-chip-os "${X_CHIP_OS_RELEASE_TAG:-}" pocketchip-rootfs.tar.gz
+}
+
 check_sudo() {
     echo ">> sudo check"
     sudo -v
@@ -304,6 +355,7 @@ if [ "$DOWNLOAD_ONLY" = 1 ]; then
     exit 0
 fi
 
+refresh_flash_sha256s
 check_flash_commands
 
 if [ "$DRY_RUN" = 1 ]; then

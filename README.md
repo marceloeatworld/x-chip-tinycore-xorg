@@ -66,29 +66,42 @@ Desktop status:
 
 ## Quick Flash From a PC
 
-Most users should flash the ready release image from a Linux PC. This erases
+Use a Linux PC. Ubuntu or Debian is the easiest path for beginners. This erases
 the PocketCHIP NAND rootfs.
 
 For this tutorial release, the helper script downloads from:
 
 <https://github.com/marceloeatworld/x-chip-tinycore-xorg/releases/tag/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc-2026-06-29>
 
-On the Linux PC:
+On Ubuntu/Debian, copy and paste:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates
+
+git clone https://github.com/marceloeatworld/x-chip-tinycore-xorg.git
+cd x-chip-tinycore-xorg
+
+./scripts/flash-release-pocketchip.sh --install-deps
+```
+
+On NixOS:
 
 ```sh
 git clone https://github.com/marceloeatworld/x-chip-tinycore-xorg.git
 cd x-chip-tinycore-xorg
-./scripts/flash-release-pocketchip.sh
+
+nix shell nixpkgs#ubootTools nixpkgs#sunxi-tools -c ./scripts/flash-release-pocketchip.sh
 ```
 
-The script downloads the release rootfs and `.sha256`, verifies the image, checks
-the flashing commands, downloads `x-chip-tools` and installer files on first
-run, then asks you to type `FLASH` before erasing NAND.
+The script downloads the release rootfs and `.sha256`, verifies the image,
+installs or checks the flashing commands, refreshes the flash helper SHA values
+from GitHub, downloads `x-chip-tools` and installer files on first run, then
+asks you to type `FLASH` before erasing NAND. Users do not need to look up SHA
+values manually.
 
-If the PC is missing a system command such as `mkimage`, `sunxi-fel`, or
-`sunxi-nand-image-builder`, the script offers to install the common
-Debian/Ubuntu packages when `apt-get` is available. On other distros, it says
-that automatic install is unavailable and prints the missing command names.
+On other Linux distros, run `./scripts/flash-release-pocketchip.sh`. If automatic
+package install is unavailable, it prints the missing command names.
 
 To test the download, SHA check, and command detection without writing NAND:
 
