@@ -296,6 +296,11 @@ for required in \
     usr/local/bin/xdg-open \
     usr/local/bin/x-chip-tic80 \
     usr/local/bin/x-chip-goattracker \
+    usr/local/bin/x-chip-sunvox \
+    usr/local/bin/x-chip-virtual-ans \
+    usr/local/bin/x-chip-pixitracker \
+    usr/local/bin/x-chip-pixitracker-1bit \
+    usr/local/bin/x-chip-pixilang \
     usr/local/bin/x-chip-mgba \
     usr/local/bin/x-chip-pico8 \
     usr/local/bin/x-chip-games \
@@ -455,6 +460,11 @@ for root_owned in \
     usr/local/bin/xdg-open \
     usr/local/bin/x-chip-tic80 \
     usr/local/bin/x-chip-goattracker \
+    usr/local/bin/x-chip-sunvox \
+    usr/local/bin/x-chip-virtual-ans \
+    usr/local/bin/x-chip-pixitracker \
+    usr/local/bin/x-chip-pixitracker-1bit \
+    usr/local/bin/x-chip-pixilang \
     usr/local/bin/x-chip-mgba \
     usr/local/bin/x-chip-pico8 \
     usr/local/bin/x-chip-games \
@@ -572,6 +582,11 @@ require_mode_pattern usr/local/bin/x-chip-video '-rwx*'
 require_type usr/local/bin/xdg-open l
 require_mode_pattern usr/local/bin/x-chip-tic80 '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-goattracker '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-sunvox '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-virtual-ans '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-pixitracker '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-pixitracker-1bit '-rwx*'
+require_mode_pattern usr/local/bin/x-chip-pixilang '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-mgba '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-pico8 '-rwx*'
 require_mode_pattern usr/local/bin/x-chip-games '-rwx*'
@@ -789,6 +804,9 @@ require_content usr/local/bin/x-chip-xorg-launch-vt 'XORG_SERVER_LOG=/tmp/Xorg.0
 require_content usr/local/bin/x-chip-xorg-launch-vt '-logfile "$XORG_SERVER_LOG"'
 reject_content usr/local/bin/x-chip-xorg-launch-vt '-configdir "$EMPTY_CONFIG_DIR"'
 reject_content usr/local/bin/x-chip-xorg-launch-vt 'start_ssh_if_needed'
+require_content opt/x-chip-boot.sh 'DISPLAY_CONFIG=${X_CHIP_DISPLAY_CONFIG:-/usr/local/etc/x-chip/display.conf}'
+require_content opt/x-chip-boot.sh 'saved_lcd_brightness'
+require_content opt/x-chip-boot.sh 'brightness="$(saved_lcd_brightness 2>/dev/null || true)"'
 require_content usr/local/bin/x-chip-brightness '/sys/class/backlight'
 require_content usr/local/bin/x-chip-brightness 'MIN_BRIGHTNESS='
 require_content usr/local/bin/x-chip-brightness 'filetool.sh -b'
@@ -854,6 +872,16 @@ require_content usr/local/bin/x-chip-tic80 'printf '\''\034\035'\'''
 reject_content usr/local/bin/x-chip-tic80 'tic80 --version'
 require_content usr/local/bin/x-chip-goattracker 'run_tce_load /tce/optional/goattracker.tcz'
 require_content usr/local/bin/x-chip-goattracker 'su "$TC_USER" -c "tce-load -il $target"'
+require_content usr/local/bin/x-chip-sunvox 'run_tce_load /tce/optional/sunvox.tcz'
+require_content usr/local/bin/x-chip-sunvox 'exec "$cmd" "$@"'
+require_content usr/local/bin/x-chip-virtual-ans 'run_tce_load /tce/optional/virtual-ans.tcz'
+require_content usr/local/bin/x-chip-virtual-ans 'exec virtual-ans "$@"'
+require_content usr/local/bin/x-chip-pixitracker 'run_tce_load /tce/optional/pixitracker.tcz'
+require_content usr/local/bin/x-chip-pixitracker 'exec pixitracker "$@"'
+require_content usr/local/bin/x-chip-pixitracker-1bit 'run_tce_load /tce/optional/pixitracker-1bit.tcz'
+require_content usr/local/bin/x-chip-pixitracker-1bit 'exec pixitracker-1bit "$@"'
+require_content usr/local/bin/x-chip-pixilang 'run_tce_load /tce/optional/pixilang.tcz'
+require_content usr/local/bin/x-chip-pixilang 'exec pixilang "$@"'
 require_content usr/local/bin/x-chip-mgba 'run_tce_load /tce/optional/mgba.tcz'
 require_content usr/local/bin/x-chip-mgba 'su "$TC_USER" -c "tce-load -il $target"'
 require_content usr/local/bin/x-chip-mgba 'Games/GameBoy'
@@ -933,6 +961,10 @@ require_content usr/local/bin/x-chip-doom '-nosound -nomusic'
 require_content usr/local/share/x-chip/tic80-carts.tsv '8-bit-panda'
 require_content usr/local/share/x-chip/tic80-carts.tsv 'https://tic80.com/cart/'
 require_content usr/local/bin/x-chip-desktop-stats 'conky -c'
+require_content usr/local/bin/x-chip-desktop-stats 'STATE_CONFIG=${X_CHIP_DESKTOP_STATS_CONFIG:-/usr/local/etc/x-chip/desktop-stats.conf}'
+require_content usr/local/bin/x-chip-desktop-stats 'X_CHIP_DESKTOP_STATS='
+require_content usr/local/bin/x-chip-desktop-stats 'filetool.sh -b'
+require_content usr/local/bin/x-chip-desktop-stats 'restore_stats'
 require_content usr/local/bin/x-chip-wifi-menu 'iw dev "$iface" scan'
 require_content usr/local/bin/x-chip-wifi-menu 'wpa_supplicant -B'
 require_content usr/local/bin/x-chip-wifi-menu 'filetool.sh -b'
@@ -948,6 +980,7 @@ require_content usr/local/bin/x-chip-logs '/var/log/x-chip-desktop.log'
 require_content usr/local/bin/x-chip-logs '/tmp/Xorg.0.log'
 require_content usr/local/etc/x-chip/display.conf 'LCD_BRIGHTNESS='
 require_content usr/local/etc/x-chip/desktop.conf 'X_CHIP_DESKTOP_AUTOSTART=1'
+require_content usr/local/etc/x-chip/desktop-stats.conf 'X_CHIP_DESKTOP_STATS=0'
 require_content usr/local/etc/x-chip/wifi.conf 'X_CHIP_WIFI_CLIENT_DRIVER=rtl8723bs'
 require_content usr/local/etc/x-chip/wifi.conf 'X_CHIP_WIFI_SCAN_DRIVER=rtl8812au'
 require_content usr/local/share/x-chip/materialized-tcz.lst 'openssh.tcz'
@@ -985,6 +1018,11 @@ require_content opt/.filetool.lst 'usr/local/bin/xdg-open'
 require_content opt/.filetool.lst 'usr/local/share/applications'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-tic80'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-goattracker'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-sunvox'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-virtual-ans'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-pixitracker'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-pixitracker-1bit'
+require_content opt/.filetool.lst 'usr/local/bin/x-chip-pixilang'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-mgba'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-pico8'
 require_content opt/.filetool.lst 'usr/local/bin/x-chip-games'
@@ -1014,6 +1052,7 @@ require_content usr/local/share/x-chip/xorg/jwmrc '<Tray'
 require_content usr/local/share/x-chip/xorg/jwmrc '<IconPath>/usr/local/share/x-chip/xorg/icons</IconPath>'
 require_content usr/local/share/x-chip/xorg/jwmrc '<DefaultIcon>pocket.xpm</DefaultIcon>'
 require_content usr/local/share/x-chip/xorg/jwmrc '<StartupCommand>x-chip-x-apply-calibration</StartupCommand>'
+require_content usr/local/share/x-chip/xorg/jwmrc '<StartupCommand>x-chip-desktop-stats restore</StartupCommand>'
 require_content usr/local/share/x-chip/xorg/jwmrc '<RestartCommand>x-chip-x-apply-calibration</RestartCommand>'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Menu" icon="menu.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Play" icon="pocket.xpm" popup="Games"'
@@ -1025,6 +1064,12 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'label="Code" icon="code.xpm">
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Calculator" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Images" icon="image.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Music" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="Music Player" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="SunVox" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="Virtual ANS" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="PixiTracker" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="PixiTracker 1Bit" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'label="Pixilang" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Video" icon="monitor.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Games" icon="apps.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Game Launcher" icon="apps.xpm"'
@@ -1044,6 +1089,11 @@ reject_content usr/local/share/x-chip/xorg/jwmrc '<Program label="8 Bit Panda" i
 reject_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 run'
 reject_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-tic80 play'
 require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-goattracker'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-sunvox'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-virtual-ans'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-pixitracker'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-pixitracker-1bit'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-term-hold x-chip-pixilang'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Apps" icon="apps.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Network" icon="network.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Brightness" icon="brightness.xpm"'
@@ -1155,7 +1205,7 @@ require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*cursorColor: #1F7A6
 require_content usr/local/share/x-chip/xorg/Xdefaults 'Aterm*font: 8x13'
 require_content usr/local/bin/x-chip-close-app 'pkill -9'
 require_content usr/local/bin/x-chip-close-app 'pcmanfm dillo geany leafpad gpicview ffplay mpg123'
-require_content usr/local/bin/x-chip-close-game 'tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker'
+require_content usr/local/bin/x-chip-close-game 'tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker sunvox sunvox-lofi pixilang'
 require_content usr/local/bin/x-chip-close-game 'pkill -9 "$name"'
 require_content usr/local/bin/x-chip-game-launch 'x-chip-tic80|x-chip-mgba|x-chip-doom|x-chip-pico8|x-chip-goattracker'
 require_content usr/local/bin/x-chip-game-launch '/tmp/x-chip-game-launch.log'
@@ -1260,6 +1310,11 @@ for script in \
     usr/local/bin/x-chip-video \
     usr/local/bin/x-chip-tic80 \
     usr/local/bin/x-chip-goattracker \
+    usr/local/bin/x-chip-sunvox \
+    usr/local/bin/x-chip-virtual-ans \
+    usr/local/bin/x-chip-pixitracker \
+    usr/local/bin/x-chip-pixitracker-1bit \
+    usr/local/bin/x-chip-pixilang \
     usr/local/bin/x-chip-mgba \
     usr/local/bin/x-chip-pico8 \
     usr/local/bin/x-chip-games \
@@ -1321,6 +1376,34 @@ if [ "${PRESEED_TCZ:-1}" = 1 ]; then
         require_content "tce/optional/goattracker.tcz.dep" 'SDL.tcz'
         reject_content tce/onboot.lst 'goattracker.tcz'
     fi
+    if has_entry "tce/optional/sunvox.tcz"; then
+        require_entry "tce/optional/sunvox.tcz.dep"
+        require_entry "tce/optional/sdl2.tcz"
+        require_entry "tce/optional/libasound.tcz"
+        require_entry "tce/optional/gcc_libs.tcz"
+        require_entry "tce/optional/Xlibs.tcz"
+        require_content "tce/optional/sunvox.tcz.dep" 'sdl2.tcz'
+        require_content "tce/optional/sunvox.tcz.dep" 'libasound.tcz'
+        reject_content tce/onboot.lst 'sunvox.tcz'
+    fi
+    require_warmplace_music_ext() {
+        local ext=$1
+        require_entry "tce/optional/$ext.tcz.dep"
+        require_entry "tce/optional/sdl2.tcz"
+        require_entry "tce/optional/libasound.tcz"
+        require_entry "tce/optional/gcc_libs.tcz"
+        require_entry "tce/optional/Xlibs.tcz"
+        require_content "tce/optional/$ext.tcz.dep" 'sdl2.tcz'
+        require_content "tce/optional/$ext.tcz.dep" 'libasound.tcz'
+        require_content "tce/optional/$ext.tcz.dep" 'gcc_libs.tcz'
+        require_content "tce/optional/$ext.tcz.dep" 'Xlibs.tcz'
+        reject_content tce/onboot.lst "$ext.tcz"
+    }
+    for warmplace_ext in virtual-ans pixitracker pixitracker-1bit pixilang; do
+        if has_entry "tce/optional/$warmplace_ext.tcz"; then
+            require_warmplace_music_ext "$warmplace_ext"
+        fi
+    done
     if has_entry "tce/optional/mgba.tcz"; then
         require_entry "tce/optional/mgba.tcz.dep"
         require_entry "tce/optional/SDL.tcz"

@@ -27,6 +27,15 @@ cd /work
 OUT_DIR=${OUT_DIR:-/work/dist/community-tcz}
 WORK_DIR=${WORK_DIR:-/work/build/community-tcz}
 GOATTRACKER_VERSION=${GOATTRACKER_VERSION:-2.77+ds-1}
+SUNVOX_VERSION=${SUNVOX_VERSION:-2.1.4d}
+SUNVOX_URL=${SUNVOX_URL:-https://warmplace.ru/soft/sunvox/sunvox-${SUNVOX_VERSION}.zip}
+VIRTUAL_ANS_VERSION=${VIRTUAL_ANS_VERSION:-3.0.4}
+VIRTUAL_ANS_URL=${VIRTUAL_ANS_URL:-https://warmplace.ru/soft/ans/virtual_ans-${VIRTUAL_ANS_VERSION}.zip}
+PIXITRACKER_VERSION=${PIXITRACKER_VERSION:-1.6.8}
+PIXITRACKER_URL=${PIXITRACKER_URL:-https://warmplace.ru/soft/pixitracker/pixitracker-${PIXITRACKER_VERSION}.zip}
+PIXITRACKER_1BIT_URL=${PIXITRACKER_1BIT_URL:-https://warmplace.ru/soft/pixitracker/pixitracker_1bit-${PIXITRACKER_VERSION}.zip}
+PIXILANG_VERSION=${PIXILANG_VERSION:-3.8.6f}
+PIXILANG_URL=${PIXILANG_URL:-https://warmplace.ru/soft/pixilang/pixilang-${PIXILANG_VERSION}.zip}
 TIC80_TAG=${TIC80_TAG:-v1.1.2837}
 MGBA_TAG=${MGBA_TAG:-0.10.5}
 CHOCOLATE_DOOM_TAG=${CHOCOLATE_DOOM_TAG:-chocolate-doom-3.1.1}
@@ -35,7 +44,7 @@ JOBS=${JOBS:-$(nproc)}
 
 apps=("$@")
 if [ "${#apps[@]}" = 0 ]; then
-    apps=(goattracker tic80 mgba doom)
+    apps=(goattracker sunvox virtual-ans pixitracker pixitracker-1bit pixilang tic80 mgba doom)
 fi
 
 apt_updated=0
@@ -154,6 +163,316 @@ EOF
         "                SDL.tcz, gcc_libs.tcz" \
         "                Source: Debian goattracker $GOATTRACKER_VERSION, cross-built for armhf."
     file "$pkg/usr/local/bin/goattracker"
+}
+
+build_sunvox() {
+    echo ">> packaging sunvox.tcz from official SunVox $SUNVOX_VERSION Linux ARM release"
+    install_common_tools
+    apt_install unzip wget
+
+    local work="$WORK_DIR/sunvox"
+    local archive="$work/sunvox-$SUNVOX_VERSION.zip"
+    local src="$work/src/sunvox"
+    local pkg="$work/pkgroot"
+    rm -rf "$work"
+    mkdir -p "$work"
+
+    wget -q -O "$archive" "$SUNVOX_URL"
+    unzip -q "$archive" -d "$work/src"
+
+    [ -x "$src/sunvox/linux_arm/sunvox" ] || {
+        echo "ERROR: SunVox Linux ARM binary not found in $SUNVOX_URL" >&2
+        exit 1
+    }
+    [ -x "$src/sunvox/linux_arm/sunvox_lofi" ] || {
+        echo "ERROR: SunVox Linux ARM lofi binary not found in $SUNVOX_URL" >&2
+        exit 1
+    }
+
+    mkdir -p "$pkg/usr/local/bin" "$pkg/usr/local/lib/sunvox" \
+        "$pkg/usr/local/share/sunvox" "$pkg/usr/local/share/doc/sunvox"
+
+    install -m0755 "$src/sunvox/linux_arm/sunvox" "$pkg/usr/local/lib/sunvox/sunvox"
+    install -m0755 "$src/sunvox/linux_arm/sunvox_lofi" "$pkg/usr/local/lib/sunvox/sunvox-lofi"
+    cp -a "$src/curves" "$src/instruments" "$src/effects" "$src/docs" \
+        "$pkg/usr/local/lib/sunvox/"
+    install -m0644 "$src/docs/license/sunvox.txt" "$pkg/usr/local/share/doc/sunvox/sunvox.txt"
+    install -m0644 "$src/docs/changelog.txt" "$pkg/usr/local/share/doc/sunvox/changelog.txt"
+    find "$pkg/usr/local/lib/sunvox" "$pkg/usr/local/share/doc/sunvox" -type d -exec chmod 0755 {} +
+    find "$pkg/usr/local/lib/sunvox" "$pkg/usr/local/share/doc/sunvox" -type f -exec chmod 0644 {} +
+    chmod 0755 "$pkg/usr/local/lib/sunvox/sunvox" "$pkg/usr/local/lib/sunvox/sunvox-lofi"
+
+    cat >"$pkg/usr/local/share/sunvox/sunvox_config.pocketchip.ini" <<'EOF'
+audiodriver alsa
+width 480
+height 272
+fullscreen
+softrender
+touchcontrol
+maxfps 20
+scale 180
+fscale 180
+ppi 120
+no_scopes
+no_levels
+EOF
+
+    cat >"$pkg/usr/local/bin/sunvox" <<'EOF'
+#!/bin/sh
+set -eu
+
+SUNVOX_DIR=${SUNVOX_DIR:-/usr/local/lib/sunvox}
+HOME=${HOME:-/home/chip}
+CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/SunVox
+CONFIG=$CONFIG_DIR/sunvox_config.ini
+
+mkdir -p "$CONFIG_DIR" 2>/dev/null || true
+if [ ! -f "$CONFIG" ] && [ -f /usr/local/share/sunvox/sunvox_config.pocketchip.ini ]; then
+	cp /usr/local/share/sunvox/sunvox_config.pocketchip.ini "$CONFIG" 2>/dev/null || true
+fi
+
+cd "$SUNVOX_DIR"
+exec "$SUNVOX_DIR/sunvox" "$@"
+EOF
+    chmod 0755 "$pkg/usr/local/bin/sunvox"
+
+    cat >"$pkg/usr/local/bin/sunvox-lofi" <<'EOF'
+#!/bin/sh
+set -eu
+
+SUNVOX_DIR=${SUNVOX_DIR:-/usr/local/lib/sunvox}
+HOME=${HOME:-/home/chip}
+CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/SunVox
+CONFIG=$CONFIG_DIR/sunvox_config.ini
+
+mkdir -p "$CONFIG_DIR" 2>/dev/null || true
+if [ ! -f "$CONFIG" ] && [ -f /usr/local/share/sunvox/sunvox_config.pocketchip.ini ]; then
+	cp /usr/local/share/sunvox/sunvox_config.pocketchip.ini "$CONFIG" 2>/dev/null || true
+fi
+
+cd "$SUNVOX_DIR"
+exec "$SUNVOX_DIR/sunvox-lofi" "$@"
+EOF
+    chmod 0755 "$pkg/usr/local/bin/sunvox-lofi"
+
+    make_tcz sunvox "$pkg"
+    cat >"$OUT_DIR/sunvox.tcz.dep" <<'EOF'
+sdl2.tcz
+gcc_libs.tcz
+libasound.tcz
+Xlibs.tcz
+EOF
+    stage_info \
+        sunvox \
+        "$SUNVOX_VERSION" \
+        "Freeware; redistribution allowed" \
+        "https://warmplace.ru/soft/sunvox/" \
+        "Modular music studio with bundled instruments and effects" \
+        "                sdl2.tcz, gcc_libs.tcz, libasound.tcz, Xlibs.tcz" \
+        "                Source: official SunVox $SUNVOX_VERSION Linux ARM release. Includes non-OpenGL and lofi ARM binaries plus bundled instruments, effects, curves, and docs."
+    file "$pkg/usr/local/lib/sunvox/sunvox" "$pkg/usr/local/lib/sunvox/sunvox-lofi"
+}
+
+write_warmplace_deps() {
+    local name=$1
+    cat >"$OUT_DIR/$name.tcz.dep" <<'EOF'
+sdl2.tcz
+gcc_libs.tcz
+libasound.tcz
+Xlibs.tcz
+EOF
+}
+
+write_boot_pixicode_wrapper() {
+    local pkg=$1 command=$2 app_dir=$3
+    cat >"$pkg/usr/local/bin/$command" <<EOF
+#!/bin/sh
+set -eu
+
+APP_DIR=$app_dir
+cd "\$APP_DIR"
+exec "\$APP_DIR/bin/pixilang" boot.pixicode "\$@"
+EOF
+    chmod 0755 "$pkg/usr/local/bin/$command"
+}
+
+write_pocket_pixilang_config() {
+    local file=$1 window_name=$2 extra=${3:-}
+    cat >"$file" <<EOF
+windowname "$window_name"
+audiodriver alsa
+width 480
+height 272
+fullscreen
+softrender
+touchcontrol
+maxfps 20
+scale 180
+fscale 180
+ppi 120
+buffer 1024
+EOF
+    if [ -n "$extra" ]; then
+        printf '%s\n' "$extra" >>"$file"
+    fi
+}
+
+build_warmplace_boot_pixicode_app() {
+    local name=$1 version=$2 url=$3 root_dir=$4 command=$5 window_name=$6 site=$7 description=$8 license=$9 info=${10} extra_config=${11:-}
+    echo ">> packaging $name.tcz from official WarmPlace $version Linux ARM release"
+    install_common_tools
+    apt_install unzip wget
+
+    local work="$WORK_DIR/$name"
+    local archive="$work/$name-$version.zip"
+    local src="$work/src/$root_dir"
+    local pkg="$work/pkgroot"
+    local app_dir="/usr/local/lib/$name"
+    local app_root="$pkg$app_dir"
+    rm -rf "$work"
+    mkdir -p "$work"
+
+    wget -q -O "$archive" "$url"
+    unzip -q "$archive" -d "$work/src"
+
+    [ -x "$src/bin/pixilang_linux_arm_armhf" ] || {
+        echo "ERROR: $name Linux ARM hard-float Pixilang binary not found in $url" >&2
+        exit 1
+    }
+    [ -f "$src/boot.pixicode" ] || {
+        echo "ERROR: $name boot.pixicode not found in $url" >&2
+        exit 1
+    }
+
+    mkdir -p "$pkg/usr/local/bin" "$app_root/bin" "$pkg/usr/local/share/doc/$name"
+    cp -a "$src/." "$app_root/"
+    rm -rf \
+        "$app_root/START_MACOS.app" \
+        "$app_root"/START_WINDOWS* \
+        "$app_root"/START_LINUX_* \
+        "$app_root/bin/pixilang_linux_arm64" \
+        "$app_root/bin/pixilang_linux_x86" \
+        "$app_root/bin/pixilang_linux_x86_64"
+    install -m0755 "$src/bin/pixilang_linux_arm_armhf" "$app_root/bin/pixilang"
+    rm -f "$app_root/bin/pixilang_linux_arm_armhf"
+    write_pocket_pixilang_config "$app_root/pixilang_config.ini" "$window_name" "$extra_config"
+    [ -d "$app_root/docs" ] && cp -a "$app_root/docs/." "$pkg/usr/local/share/doc/$name/"
+    find "$app_root" "$pkg/usr/local/share/doc/$name" -type d -exec chmod 0755 {} +
+    find "$app_root" "$pkg/usr/local/share/doc/$name" -type f -exec chmod 0644 {} +
+    chmod 0755 "$app_root/bin/pixilang"
+
+    write_boot_pixicode_wrapper "$pkg" "$command" "$app_dir"
+    make_tcz "$name" "$pkg"
+    write_warmplace_deps "$name"
+    stage_info \
+        "$name" \
+        "$version" \
+        "$license" \
+        "$site" \
+        "$description" \
+        "                sdl2.tcz, gcc_libs.tcz, libasound.tcz, Xlibs.tcz" \
+        "$info"
+    file "$app_root/bin/pixilang"
+}
+
+build_virtual_ans() {
+    build_warmplace_boot_pixicode_app \
+        virtual-ans \
+        "$VIRTUAL_ANS_VERSION" \
+        "$VIRTUAL_ANS_URL" \
+        virtual_ans3 \
+        virtual-ans \
+        "Virtual ANS" \
+        "https://warmplace.ru/soft/ans/" \
+        "Spectral synthesizer based on drawing sound as images" \
+        "Freeware; redistribution allowed" \
+        "                Source: official Virtual ANS $VIRTUAL_ANS_VERSION Linux ARM release. Includes bundled projects, synth examples, resources, and docs." \
+        "pixi_containers_num 65536"
+}
+
+build_pixitracker() {
+    build_warmplace_boot_pixicode_app \
+        pixitracker \
+        "$PIXITRACKER_VERSION" \
+        "$PIXITRACKER_URL" \
+        pixitracker \
+        pixitracker \
+        "PixiTracker" \
+        "https://warmplace.ru/soft/pixitracker/" \
+        "Pattern-based sampler/tracker for quick music sketches" \
+        "Freeware; redistribution allowed" \
+        "                Source: official PixiTracker $PIXITRACKER_VERSION 16Bit Linux ARM release. Includes sound packs, example songs, resources, and docs."
+}
+
+build_pixitracker_1bit() {
+    build_warmplace_boot_pixicode_app \
+        pixitracker-1bit \
+        "$PIXITRACKER_VERSION" \
+        "$PIXITRACKER_1BIT_URL" \
+        pixitracker_1bit \
+        pixitracker-1bit \
+        "PixiTracker 1BIT" \
+        "https://warmplace.ru/soft/pixitracker/" \
+        "Retro 1-bit variant of PixiTracker" \
+        "Freeware; redistribution allowed" \
+        "                Source: official PixiTracker 1Bit $PIXITRACKER_VERSION Linux ARM release. Includes sound packs, example songs, resources, and docs."
+}
+
+build_pixilang() {
+    echo ">> packaging pixilang.tcz from official Pixilang $PIXILANG_VERSION Linux ARM release"
+    install_common_tools
+    apt_install unzip wget
+
+    local work="$WORK_DIR/pixilang"
+    local archive="$work/pixilang-$PIXILANG_VERSION.zip"
+    local src="$work/src/pixilang/pixilang3"
+    local pkg="$work/pkgroot"
+    local app_dir=/usr/local/lib/pixilang
+    local app_root="$pkg$app_dir"
+    rm -rf "$work"
+    mkdir -p "$work"
+
+    wget -q -O "$archive" "$PIXILANG_URL"
+    unzip -q "$archive" -d "$work/src"
+
+    [ -x "$src/bin/linux_arm/pixilang_no_opengl" ] || {
+        echo "ERROR: Pixilang Linux ARM no-OpenGL binary not found in $PIXILANG_URL" >&2
+        exit 1
+    }
+
+    mkdir -p "$pkg/usr/local/bin" "$app_root/bin" "$pkg/usr/local/share/doc/pixilang"
+    install -m0755 "$src/bin/linux_arm/pixilang_no_opengl" "$app_root/bin/pixilang"
+    cp -a "$src/docs" "$src/examples" "$src/lib" "$app_root/"
+    write_pocket_pixilang_config "$app_root/pixilang_config.ini" "Pixilang"
+    cp -a "$src/docs/." "$pkg/usr/local/share/doc/pixilang/"
+    find "$app_root" "$pkg/usr/local/share/doc/pixilang" -type d -exec chmod 0755 {} +
+    find "$app_root" "$pkg/usr/local/share/doc/pixilang" -type f -exec chmod 0644 {} +
+    chmod 0755 "$app_root/bin/pixilang"
+
+    cat >"$pkg/usr/local/bin/pixilang" <<EOF
+#!/bin/sh
+set -eu
+
+PIXILANG_DIR=$app_dir
+if [ "\$#" = 0 ]; then
+	cd "\$PIXILANG_DIR/examples/sound"
+	exec "\$PIXILANG_DIR/bin/pixilang" pixelwave.pixi
+fi
+exec "\$PIXILANG_DIR/bin/pixilang" "\$@"
+EOF
+    chmod 0755 "$pkg/usr/local/bin/pixilang"
+
+    make_tcz pixilang "$pkg"
+    write_warmplace_deps pixilang
+    stage_info \
+        pixilang \
+        "$PIXILANG_VERSION" \
+        "MIT" \
+        "https://warmplace.ru/soft/pixilang/" \
+        "Small graphics and sound programming language with MIDI and audio examples" \
+        "                sdl2.tcz, gcc_libs.tcz, libasound.tcz, Xlibs.tcz" \
+        "                Source: official Pixilang $PIXILANG_VERSION Linux ARM release. The PocketCHIP package uses the no-OpenGL ARM binary and includes docs, examples, and libraries."
+    file "$app_root/bin/pixilang"
 }
 
 write_tic80_toolchain() {
@@ -655,11 +974,16 @@ EOF
 for app in "${apps[@]}"; do
     case "$app" in
         goattracker) build_goattracker ;;
+        sunvox) build_sunvox ;;
+        virtual-ans) build_virtual_ans ;;
+        pixitracker) build_pixitracker ;;
+        pixitracker-1bit) build_pixitracker_1bit ;;
+        pixilang) build_pixilang ;;
         tic80) build_tic80 ;;
         mgba) build_mgba ;;
         doom) build_doom ;;
-        all) build_goattracker; build_tic80; build_mgba; build_doom ;;
-        *) echo "ERROR: unknown app '$app' (expected goattracker, tic80, mgba, doom, or all)" >&2; exit 2 ;;
+        all) build_goattracker; build_sunvox; build_virtual_ans; build_pixitracker; build_pixitracker_1bit; build_pixilang; build_tic80; build_mgba; build_doom ;;
+        *) echo "ERROR: unknown app '$app' (expected goattracker, sunvox, virtual-ans, pixitracker, pixitracker-1bit, pixilang, tic80, mgba, doom, or all)" >&2; exit 2 ;;
     esac
 done
 

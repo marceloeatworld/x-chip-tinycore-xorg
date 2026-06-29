@@ -141,6 +141,8 @@ settings daemon:
 
 - `x-chip-brightness` changes `/sys/class/backlight/*/brightness` and saves the
   default in `/usr/local/etc/x-chip/display.conf`
+- `x-chip-desktop-stats` shows or hides the Conky desktop stats and saves the
+  on/off state in `/usr/local/etc/x-chip/desktop-stats.conf`
 - `x-chip-wifi-menu` keeps the internal RTL8723BS adapter as the client/default
   route interface and uses an optional RTL8812AU USB adapter for external scans
   when present
@@ -288,6 +290,11 @@ or one app at a time:
 
 ```sh
 ./scripts/09-build-community-tcz.sh goattracker
+./scripts/09-build-community-tcz.sh sunvox
+./scripts/09-build-community-tcz.sh virtual-ans
+./scripts/09-build-community-tcz.sh pixitracker
+./scripts/09-build-community-tcz.sh pixitracker-1bit
+./scripts/09-build-community-tcz.sh pixilang
 ./scripts/09-build-community-tcz.sh tic80
 ./scripts/09-build-community-tcz.sh mgba
 ./scripts/09-build-community-tcz.sh doom
@@ -303,6 +310,16 @@ Current optional recipes:
 
 - `goattracker.tcz`: C64 music editor, built from Debian source
   `goattracker 2.77+ds-1`
+- `sunvox.tcz`: WarmPlace SunVox modular music studio, packaged from the
+  official Linux ARM release `2.1.4d`
+- `virtual-ans.tcz`: WarmPlace Virtual ANS spectral synthesizer, packaged from
+  the official Linux ARM release `3.0.4`
+- `pixitracker.tcz`: WarmPlace PixiTracker 16Bit, packaged from the official
+  Linux ARM release `1.6.8`
+- `pixitracker-1bit.tcz`: WarmPlace PixiTracker 1Bit, packaged from the
+  official Linux ARM release `1.6.8`
+- `pixilang.tcz`: WarmPlace Pixilang, packaged from the official Linux ARM
+  no-OpenGL binary `3.8.6f` with docs, libraries, and examples
 - `tic80.tcz`: TIC-80 fantasy computer, built from upstream tag `v1.1.2837`
 - `mgba.tcz`: Game Boy, Game Boy Color, and Game Boy Advance emulator, built
   from upstream mGBA tag `0.10.5` with the lightweight SDL 1.2 frontend
@@ -312,12 +329,13 @@ Current optional recipes:
   commercial PICO-8 binary
 
 If `dist/community-tcz/` exists when the rootfs is assembled, the builder caches
-`tic80.tcz`, `goattracker.tcz`, `mgba.tcz`, `doom.tcz`, and their runtime
-dependencies in `/tce/optional`. They are still not added to `tce/onboot.lst`,
-`tce/xorg.lst`, or `tce/media.lst`, so they do not load during boot. JWM exposes
-them under `Games`. The `Play` tray button opens a compact game launcher, and
-the wrappers run `tce-load -i` only when the user clicks TIC-80, GoatTracker,
-Game Boy, or Doom.
+the community apps and their runtime dependencies in `/tce/optional`. They are
+still not added to `tce/onboot.lst`, `tce/xorg.lst`, or `tce/media.lst`, so they
+do not load during boot. JWM exposes the music tools under `Music` and games
+under `Games`. The wrappers run `tce-load -i` only when the user clicks an app.
+WarmPlace music apps are configured for the PocketCHIP LCD (`480x272`,
+fullscreen, software renderer). The PocketCHIP Home key closes fullscreen games
+and music apps by sending TERM first, then KILL if the process is still running.
 
 The TIC-80 menu includes a curated top-rated game list. The image does not
 redistribute `.tic` cartridges; `x-chip-tic80` downloads each cart from
@@ -426,6 +444,7 @@ scripts/09-build-community-tcz.sh
 - LCD brightness: `LCD_BRIGHTNESS=6`
 - Lightweight display config: `/usr/local/etc/x-chip/display.conf`
 - Desktop autostart config: `/usr/local/etc/x-chip/desktop.conf`
+- Desktop stats config: `/usr/local/etc/x-chip/desktop-stats.conf`
 - WiFi role config: `/usr/local/etc/x-chip/wifi.conf`
 - Internal WiFi: RTL8723BS, client/default-route role
 - External USB WiFi: RTL8812AU, optional scan role when plugged in
@@ -435,10 +454,11 @@ scripts/09-build-community-tcz.sh
 - Optional media pack: `/tce/media.lst` pre-seeds `ffmpeg.tcz` and
   `mpg123.tcz`; it is loaded on demand by `x-chip-media-on` for `ffplay` video
   playback and console MP3 playback, not at boot
-- Optional community app pack: `dist/community-tcz/` can contain `tic80.tcz`,
-  `goattracker.tcz`, `mgba.tcz`, and `doom.tcz`; when present during rootfs
-  assembly they are cached in `/tce/optional` and launched from the JWM `Games`
-  menu on demand, not loaded at boot
+- Optional community app pack: `dist/community-tcz/` can contain games and music
+  tools including TIC-80, GoatTracker, SunVox, Virtual ANS, PixiTracker,
+  PixiTracker 1Bit, Pixilang, mGBA, and Doom; when present during rootfs
+  assembly they are cached in `/tce/optional` and launched from the JWM `Music`
+  or `Games` menus on demand, not loaded at boot
 - Desktop pack: `/tce/xorg.lst` pre-seeds Xorg, fbdev, flwm/jwm, aterm,
   xrandr, xinput, Geany's `libffi6.tcz` runtime dependency, `bc`, `gpicview`,
   `conky`, and desktop apps; it is loaded by `x-chip-desktop-start` at boot

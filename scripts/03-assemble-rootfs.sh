@@ -686,6 +686,9 @@ X_CHIP_DESKTOP_AUTOSTART=${X_CHIP_DESKTOP_AUTOSTART:-1}
 X_CHIP_DESKTOP_WM=${X_CHIP_DESKTOP_WM:-jwm}
 X_CHIP_DESKTOP_VT=${X_CHIP_DESKTOP_VT:-2}
 EOF
+    install_text 0644 "$RFS/usr/local/etc/x-chip/desktop-stats.conf" <<EOF
+X_CHIP_DESKTOP_STATS=${X_CHIP_DESKTOP_STATS:-0}
+EOF
     install_text 0644 "$RFS/usr/local/etc/x-chip/wifi.conf" <<'EOF'
 X_CHIP_WIFI_CLIENT_DRIVER=rtl8723bs
 X_CHIP_WIFI_SCAN_DRIVER=rtl8812au
@@ -1858,6 +1861,209 @@ command -v goattracker >/dev/null 2>&1 || {
 DISPLAY="$DISPLAY" exec goattracker "$@"
 EOF
 
+    install_text 0755 "$RFS/usr/local/bin/x-chip-sunvox" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
+
+run_tce_load() {
+	target=$1
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
+	else
+		tce-load -il "$target"
+	fi
+}
+
+if ! command -v sunvox >/dev/null 2>&1; then
+	if ! command -v tce-load >/dev/null 2>&1; then
+		echo "tce-load is missing; cannot load sunvox.tcz." >&2
+		exit 1
+	fi
+	if [ -f /tce/optional/sunvox.tcz ]; then
+		echo "Loading SunVox..."
+		run_tce_load /tce/optional/sunvox.tcz
+	else
+		echo "sunvox.tcz is not cached in /tce/optional." >&2
+		echo "Build it with 'make community-tcz' before assembling the image." >&2
+		exit 1
+	fi
+fi
+
+cmd=sunvox
+case "${1:-}" in
+	lofi)
+		shift
+		cmd=sunvox-lofi
+		;;
+esac
+
+command -v "$cmd" >/dev/null 2>&1 || {
+	echo "$cmd did not become available after tce-load." >&2
+	exit 1
+}
+
+DISPLAY="$DISPLAY" exec "$cmd" "$@"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-virtual-ans" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
+
+run_tce_load() {
+	target=$1
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
+	else
+		tce-load -il "$target"
+	fi
+}
+
+if ! command -v virtual-ans >/dev/null 2>&1; then
+	if ! command -v tce-load >/dev/null 2>&1; then
+		echo "tce-load is missing; cannot load virtual-ans.tcz." >&2
+		exit 1
+	fi
+	if [ -f /tce/optional/virtual-ans.tcz ]; then
+		echo "Loading Virtual ANS..."
+		run_tce_load /tce/optional/virtual-ans.tcz
+	else
+		echo "virtual-ans.tcz is not cached in /tce/optional." >&2
+		echo "Build it with 'make community-tcz' before assembling the image." >&2
+		exit 1
+	fi
+fi
+
+command -v virtual-ans >/dev/null 2>&1 || {
+	echo "virtual-ans did not become available after tce-load." >&2
+	exit 1
+}
+
+DISPLAY="$DISPLAY" exec virtual-ans "$@"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-pixitracker" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
+
+run_tce_load() {
+	target=$1
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
+	else
+		tce-load -il "$target"
+	fi
+}
+
+if ! command -v pixitracker >/dev/null 2>&1; then
+	if ! command -v tce-load >/dev/null 2>&1; then
+		echo "tce-load is missing; cannot load pixitracker.tcz." >&2
+		exit 1
+	fi
+	if [ -f /tce/optional/pixitracker.tcz ]; then
+		echo "Loading PixiTracker..."
+		run_tce_load /tce/optional/pixitracker.tcz
+	else
+		echo "pixitracker.tcz is not cached in /tce/optional." >&2
+		echo "Build it with 'make community-tcz' before assembling the image." >&2
+		exit 1
+	fi
+fi
+
+command -v pixitracker >/dev/null 2>&1 || {
+	echo "pixitracker did not become available after tce-load." >&2
+	exit 1
+}
+
+DISPLAY="$DISPLAY" exec pixitracker "$@"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-pixitracker-1bit" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
+
+run_tce_load() {
+	target=$1
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
+	else
+		tce-load -il "$target"
+	fi
+}
+
+if ! command -v pixitracker-1bit >/dev/null 2>&1; then
+	if ! command -v tce-load >/dev/null 2>&1; then
+		echo "tce-load is missing; cannot load pixitracker-1bit.tcz." >&2
+		exit 1
+	fi
+	if [ -f /tce/optional/pixitracker-1bit.tcz ]; then
+		echo "Loading PixiTracker 1Bit..."
+		run_tce_load /tce/optional/pixitracker-1bit.tcz
+	else
+		echo "pixitracker-1bit.tcz is not cached in /tce/optional." >&2
+		echo "Build it with 'make community-tcz' before assembling the image." >&2
+		exit 1
+	fi
+fi
+
+command -v pixitracker-1bit >/dev/null 2>&1 || {
+	echo "pixitracker-1bit did not become available after tce-load." >&2
+	exit 1
+}
+
+DISPLAY="$DISPLAY" exec pixitracker-1bit "$@"
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-pixilang" <<'EOF'
+#!/bin/sh
+set -eu
+
+DISPLAY=${DISPLAY:-:0}
+TC_USER="$(cat /etc/sysconfig/tcuser 2>/dev/null || echo chip)"
+
+run_tce_load() {
+	target=$1
+	if [ "$(id -u)" = 0 ] && id "$TC_USER" >/dev/null 2>&1; then
+		su "$TC_USER" -c "tce-load -il $target"
+	else
+		tce-load -il "$target"
+	fi
+}
+
+if ! command -v pixilang >/dev/null 2>&1; then
+	if ! command -v tce-load >/dev/null 2>&1; then
+		echo "tce-load is missing; cannot load pixilang.tcz." >&2
+		exit 1
+	fi
+	if [ -f /tce/optional/pixilang.tcz ]; then
+		echo "Loading Pixilang..."
+		run_tce_load /tce/optional/pixilang.tcz
+	else
+		echo "pixilang.tcz is not cached in /tce/optional." >&2
+		echo "Build it with 'make community-tcz' before assembling the image." >&2
+		exit 1
+	fi
+fi
+
+command -v pixilang >/dev/null 2>&1 || {
+	echo "pixilang did not become available after tce-load." >&2
+	exit 1
+}
+
+DISPLAY="$DISPLAY" exec pixilang "$@"
+EOF
+
     install_text 0644 "$RFS/usr/local/share/x-chip/gameboy-homebrew.tsv" <<'EOF'
 # slug	title	filename	url	sha256	license	source_page
 2048	2048	2048.gb	https://github.com/wyattferguson/2048-gb/releases/download/v1.1/2048.gb	b8b0ab5dc8159dcd83680a2796010ecf9fc8c94c2cfb9cd3ff30c1998d790aa5	MIT	https://github.com/wyattferguson/2048-gb
@@ -2498,6 +2704,7 @@ set -eu
 DISPLAY=${DISPLAY:-:0}
 HOME_DIR=${HOME:-/home/chip}
 CONFIG=${X_CHIP_CONKY_CONFIG:-$HOME_DIR/.conkyrc}
+STATE_CONFIG=${X_CHIP_DESKTOP_STATS_CONFIG:-/usr/local/etc/x-chip/desktop-stats.conf}
 
 ensure_conky() {
 	if command -v conky >/dev/null 2>&1; then
@@ -2514,6 +2721,46 @@ ensure_conky() {
 		echo "Desktop stats unavailable: conky is not installed." >&2
 		return 1
 	}
+}
+
+save_state() {
+	enabled=$1
+	case "$enabled" in
+		1|yes|true|on) enabled=1 ;;
+		*) enabled=0 ;;
+	esac
+	tmp=/tmp/x-chip-desktop-stats.conf.$$
+	{
+		echo "X_CHIP_DESKTOP_STATS=$enabled"
+	} >"$tmp"
+	if [ "$(id -u)" = 0 ]; then
+		mkdir -p "$(dirname "$STATE_CONFIG")"
+		install -m644 "$tmp" "$STATE_CONFIG"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo mkdir -p "$(dirname "$STATE_CONFIG")"
+		sudo install -m644 "$tmp" "$STATE_CONFIG"
+	else
+		echo "Cannot save $STATE_CONFIG without root" >&2
+		rm -f "$tmp"
+		return 1
+	fi
+	rm -f "$tmp"
+	if command -v filetool.sh >/dev/null 2>&1; then
+		filetool.sh -b >/tmp/x-chip-desktop-stats-filetool.log 2>&1 || true
+	fi
+}
+
+load_state() {
+	[ -r "$STATE_CONFIG" ] || return 1
+	sed -n 's/^X_CHIP_DESKTOP_STATS=\([^#[:space:]]*\).*$/\1/p' "$STATE_CONFIG" | head -n 1
+}
+
+state_enabled() {
+	value=$(load_state 2>/dev/null || true)
+	case "$value" in
+		1|yes|true|on) return 0 ;;
+		*) return 1 ;;
+	esac
 }
 
 write_config() {
@@ -2559,19 +2806,32 @@ is_running() {
 }
 
 start_stats() {
-	ensure_conky
+	persist=${1:-1}
+	ensure_conky || return 1
 	write_config
 	if is_running; then
 		echo "Desktop stats already on"
+		[ "$persist" = 1 ] && save_state 1 || true
 		return 0
 	fi
 	DISPLAY="$DISPLAY" conky -c "$CONFIG" -d >/tmp/x-chip-conky.log 2>&1
+	[ "$persist" = 1 ] && save_state 1 || true
 	echo "Desktop stats on"
 }
 
 stop_stats() {
+	persist=${1:-1}
 	pkill -x conky 2>/dev/null || killall conky 2>/dev/null || true
+	[ "$persist" = 1 ] && save_state 0 || true
 	echo "Desktop stats off"
+}
+
+restore_stats() {
+	if state_enabled; then
+		start_stats 0 || true
+	else
+		stop_stats 0 >/dev/null 2>&1 || true
+	fi
 }
 
 status() {
@@ -2583,12 +2843,21 @@ status() {
 		echo "Status: off"
 	fi
 	echo "Config: $CONFIG"
+	saved=$(load_state 2>/dev/null || true)
+	case "$saved" in
+		1|yes|true|on) saved=on ;;
+		0|no|false|off) saved=off ;;
+		*) saved=unset ;;
+	esac
+	echo "Saved: $saved"
+	echo "State config: $STATE_CONFIG"
 	command -v conky >/dev/null 2>&1 && conky -v 2>/dev/null | sed -n '1p' || echo "conky: not loaded"
 }
 
 case "${1:-toggle}" in
 	on|start) start_stats ;;
 	off|stop) stop_stats ;;
+	apply|restore|boot) restore_stats ;;
 	toggle)
 		if is_running; then
 			stop_stats
@@ -2597,7 +2866,7 @@ case "${1:-toggle}" in
 		fi
 		;;
 	status) status ;;
-	*) echo "Usage: x-chip-desktop-stats [on|off|toggle|status]" >&2; exit 2 ;;
+	*) echo "Usage: x-chip-desktop-stats [on|off|toggle|restore|status]" >&2; exit 2 ;;
 esac
 EOF
 
@@ -3737,13 +4006,18 @@ case "${1:-all}" in
 	edit|leafpad) close_one leafpad ;;
 	image|gpicview) close_one gpicview ;;
 	video|ffplay) close_one ffplay ;;
-	music|mpg123) close_one mpg123 ;;
+	music|mpg123|sunvox|virtual-ans|pixitracker|pixitracker-1bit|pixilang)
+		close_one mpg123
+		close_one sunvox
+		close_one sunvox-lofi
+		close_one pixilang
+		;;
 	all)
-		for app in pcmanfm dillo geany leafpad gpicview ffplay mpg123; do
+		for app in pcmanfm dillo geany leafpad gpicview ffplay mpg123 sunvox sunvox-lofi pixilang; do
 			close_one "$app"
 		done
 		;;
-	*) echo "Usage: x-chip-close-app [all|files|web|code|edit|image|video|music]" >&2; exit 2 ;;
+	*) echo "Usage: x-chip-close-app [all|files|web|code|edit|image|video|music|sunvox|virtual-ans|pixitracker|pixitracker-1bit|pixilang]" >&2; exit 2 ;;
 esac
 
 DISPLAY=${DISPLAY:-:0} jwm -restart 2>/dev/null || true
@@ -3763,11 +4037,11 @@ force_one() {
 	pkill -9 "$name" 2>/dev/null || true
 }
 
-for app in tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker; do
+for app in tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker sunvox sunvox-lofi pixilang; do
 	close_one "$app"
 done
 sleep 1
-for app in tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker; do
+for app in tic80 mgba-sdl1 mgba chocolate-doom pico8 goattracker sunvox sunvox-lofi pixilang; do
 	force_one "$app"
 done
 
@@ -4552,6 +4826,7 @@ EOF
   <IconPath>/usr/local/share/x-chip/xorg/icons</IconPath>
   <DefaultIcon>pocket.xpm</DefaultIcon>
   <StartupCommand>x-chip-x-apply-calibration</StartupCommand>
+  <StartupCommand>x-chip-desktop-stats restore</StartupCommand>
   <RestartCommand>x-chip-x-apply-calibration</RestartCommand>
 
   <RootMenu onroot="3">
@@ -4563,12 +4838,21 @@ EOF
       <Program label="Code" icon="code.xpm">geany -s -m -p -t</Program>
       <Program label="Calculator" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Calculator -e x-chip-calc</Program>
       <Program label="Images" icon="image.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Images -e x-chip-open-image</Program>
-      <Program label="Music" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Music -e x-chip-music</Program>
       <Program label="Video" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Video -e x-chip-video</Program>
       <Separator/>
       <Program label="Links" icon="browser.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Links -e links</Program>
       <Program label="Nano" icon="editor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Nano -e nano</Program>
       <Program label="Midnight Commander" icon="files.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Files -e x-chip-mc</Program>
+    </Menu>
+    <Menu label="Music" icon="pocket.xpm">
+      <Program label="Music Player" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Music -e x-chip-music</Program>
+      <Separator/>
+      <Program label="SunVox" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title SunVox -e x-chip-term-hold x-chip-sunvox</Program>
+      <Program label="Virtual ANS" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title VirtualANS -e x-chip-term-hold x-chip-virtual-ans</Program>
+      <Program label="PixiTracker" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title PixiTracker -e x-chip-term-hold x-chip-pixitracker</Program>
+      <Program label="PixiTracker 1Bit" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Pixi1Bit -e x-chip-term-hold x-chip-pixitracker-1bit</Program>
+      <Program label="Pixilang" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Pixilang -e x-chip-term-hold x-chip-pixilang</Program>
+      <Program label="GoatTracker" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GoatTracker -e x-chip-term-hold x-chip-goattracker</Program>
     </Menu>
     <Menu label="Games" icon="apps.xpm">
       <Program label="Game Launcher" icon="apps.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Games -e x-chip-games</Program>
@@ -4596,7 +4880,6 @@ EOF
         <Program label="The Sky House" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play the-sky-house</Program>
         <Program label="TIC-Sweeper" icon="pocket.xpm">x-chip-game-launch x-chip-tic80 play tic-sweeper</Program>
       </Menu>
-      <Program label="GoatTracker" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title GoatTracker -e x-chip-term-hold x-chip-goattracker</Program>
     </Menu>
     <Menu label="Network" icon="network.xpm">
       <Program label="WiFi Setup" icon="network.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title WiFi -e x-chip-term-hold x-chip-wifi-menu</Program>
@@ -5155,7 +5438,7 @@ preseed_tcz_extensions() {
             }
             return 0
         fi
-        for app in tic80 goattracker mgba doom; do
+        for app in tic80 goattracker sunvox virtual-ans pixitracker pixitracker-1bit pixilang mgba doom; do
             if [ ! -s "$src/$app.tcz" ]; then
                 [ "$mode" = 1 ] && {
                     echo "ERROR: missing $src/$app.tcz" >&2
@@ -5253,7 +5536,7 @@ preseed_tcz_extensions() {
         done < tce/xorg.lst
     fi
 
-    for depfile in "$optional/tic80.tcz.dep" "$optional/goattracker.tcz.dep" "$optional/mgba.tcz.dep" "$optional/doom.tcz.dep"; do
+    for depfile in "$optional/tic80.tcz.dep" "$optional/goattracker.tcz.dep" "$optional/sunvox.tcz.dep" "$optional/virtual-ans.tcz.dep" "$optional/pixitracker.tcz.dep" "$optional/pixitracker-1bit.tcz.dep" "$optional/pixilang.tcz.dep" "$optional/mgba.tcz.dep" "$optional/doom.tcz.dep"; do
         [ -s "$depfile" ] || continue
         while IFS= read -r ext; do
             download_tcz "$ext"
@@ -5420,6 +5703,7 @@ HOSTNAME_VALUE="@HOSTNAME@"
 RTL8812AU_AUTOLOAD_VALUE="@RTL8812AU_AUTOLOAD@"
 RTL8812AU_HOTPLUG_VALUE="@RTL8812AU_HOTPLUG@"
 LCD_BRIGHTNESS_VALUE="@LCD_BRIGHTNESS@"
+DISPLAY_CONFIG=${X_CHIP_DISPLAY_CONFIG:-/usr/local/etc/x-chip/display.conf}
 LOG=/opt/x-chip-boot.log
 exec >>"$LOG" 2>&1
 echo "=== x-chip boot runtime $(date 2>/dev/null || true) ==="
@@ -5786,6 +6070,11 @@ load_keymap() {
 	fi
 }
 
+saved_lcd_brightness() {
+	[ -r "$DISPLAY_CONFIG" ] || return 1
+	sed -n 's/^LCD_BRIGHTNESS=\([0-9][0-9]*\)$/\1/p' "$DISPLAY_CONFIG" | head -n 1
+}
+
 enable_display_console() {
 	for backlight in /sys/class/backlight/*; do
 		[ -e "$backlight" ] || continue
@@ -5795,7 +6084,8 @@ enable_display_console() {
 			[ -n "$max_brightness" ] || max_brightness=10
 			min_brightness=1
 			[ "$max_brightness" -lt "$min_brightness" ] && min_brightness=0
-			brightness="$LCD_BRIGHTNESS_VALUE"
+			brightness="$(saved_lcd_brightness 2>/dev/null || true)"
+			[ -n "$brightness" ] || brightness="$LCD_BRIGHTNESS_VALUE"
 			case "$brightness" in
 				''|*[!0-9]*) brightness="$max_brightness" ;;
 			esac
@@ -5998,6 +6288,11 @@ EOF
         "usr/local/bin/xdg-open" \
         "usr/local/bin/x-chip-tic80" \
         "usr/local/bin/x-chip-goattracker" \
+        "usr/local/bin/x-chip-sunvox" \
+        "usr/local/bin/x-chip-virtual-ans" \
+        "usr/local/bin/x-chip-pixitracker" \
+        "usr/local/bin/x-chip-pixitracker-1bit" \
+        "usr/local/bin/x-chip-pixilang" \
         "usr/local/bin/x-chip-mgba" \
         "usr/local/bin/x-chip-pico8" \
         "usr/local/bin/x-chip-games" \
@@ -6107,6 +6402,11 @@ for required in \
     ./usr/local/bin/xdg-open \
     ./usr/local/bin/x-chip-tic80 \
     ./usr/local/bin/x-chip-goattracker \
+    ./usr/local/bin/x-chip-sunvox \
+    ./usr/local/bin/x-chip-virtual-ans \
+    ./usr/local/bin/x-chip-pixitracker \
+    ./usr/local/bin/x-chip-pixitracker-1bit \
+    ./usr/local/bin/x-chip-pixilang \
     ./usr/local/bin/x-chip-mgba \
     ./usr/local/bin/x-chip-pico8 \
     ./usr/local/bin/x-chip-games \
@@ -6157,6 +6457,7 @@ for required in \
     ./usr/local/share/icons/x-chip/16x16/places/folder.xpm \
     ./usr/local/etc/x-chip/display.conf \
     ./usr/local/etc/x-chip/desktop.conf \
+    ./usr/local/etc/x-chip/desktop-stats.conf \
     ./usr/local/share/x-chip/xorg/20-pocketchip-fbturbo.conf.example \
     ./usr/local/etc/ssh/sshd_config \
     ./home/$SSH_USER/.ssh/authorized_keys \
