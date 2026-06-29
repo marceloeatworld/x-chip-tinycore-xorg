@@ -1712,9 +1712,14 @@ install_game() {
 }
 
 install_all() {
-	awk -F '	' 'NF >= 4 && $1 !~ /^#/ { print $1 }' "$MANIFEST" | while IFS= read -r slug; do
-		install_game "$slug"
+	failed=0
+	for slug in $(awk -F '	' 'NF >= 4 && $1 !~ /^#/ { print $1 }' "$MANIFEST"); do
+		install_game "$slug" || {
+			echo "WARN: failed to install $slug" >&2
+			failed=1
+		}
 	done
+	return "$failed"
 }
 
 write_pocketchip_tic80_options() {
@@ -1796,7 +1801,7 @@ menu() {
 		read choice || exit 0
 		case "$choice" in
 			q|Q) exit 0 ;;
-			a|A) install_all; pause ;;
+			a|A) install_all || true; pause ;;
 			t|T) run_tic80 ;;
 			''|*[!0-9]*) echo "Invalid selection"; pause ;;
 			*)
@@ -2255,9 +2260,14 @@ install_game() {
 }
 
 install_all() {
-	awk -F '	' 'NF >= 7 && $1 !~ /^#/ { print $1 }' "$MANIFEST" | while IFS= read -r slug; do
-		install_game "$slug"
+	failed=0
+	for slug in $(awk -F '	' 'NF >= 7 && $1 !~ /^#/ { print $1 }' "$MANIFEST"); do
+		install_game "$slug" || {
+			echo "WARN: failed to install $slug" >&2
+			failed=1
+		}
 	done
+	return "$failed"
 }
 
 list_homebrew() {
@@ -2333,7 +2343,7 @@ run_mgba() {
 	SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-x11}
 	SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}
 	export DISPLAY SDL_VIDEODRIVER SDL_AUDIODRIVER
-	exec "$cmd" -1 \
+	"$cmd" -1 \
 		-C "fullscreen=$MGBA_FULLSCREEN" \
 		-C "width=$MGBA_WIDTH" \
 		-C "height=$MGBA_HEIGHT" \
@@ -2457,7 +2467,7 @@ menu() {
 		read choice || exit 0
 		case "$choice" in
 			q|Q) exit 0 ;;
-			a|A) install_all; pause ;;
+			a|A) install_all || true; pause ;;
 			l|L) browse_local_roms; pause ;;
 			s|S) status; pause ;;
 			''|*[!0-9]*) echo "Invalid selection"; pause ;;
@@ -2695,11 +2705,11 @@ run_game() {
 	SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-x11}
 	export DISPLAY HOME SDL_VIDEODRIVER
 	if [ "${X_CHIP_DOOM_SOUND:-0}" = 1 ]; then
-		exec chocolate-doom -iwad "$IWAD" -window -geometry 480x272 "$@"
+		exec chocolate-doom -iwad "$IWAD" -fullscreen "$@"
 	fi
 	SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}
 	export SDL_AUDIODRIVER
-	exec chocolate-doom -iwad "$IWAD" -window -geometry 480x272 -nosound -nomusic "$@"
+	exec chocolate-doom -iwad "$IWAD" -fullscreen -nosound -nomusic "$@"
 }
 
 case "${1:-run}" in
@@ -3231,7 +3241,7 @@ ensure_client_wifi() {
 		sleep 1
 	done
 	[ -n "${iface:-}" ] || {
-		echo "No WiFi interface found"
+		echo "No WiFi interface found" >&2
 		return 1
 	}
 	ip link set "$iface" up 2>/dev/null || ifconfig "$iface" up 2>/dev/null || true
@@ -3249,7 +3259,7 @@ ensure_scan_wifi() {
 		sleep 1
 	done
 	[ -n "${iface:-}" ] || {
-		echo "No external scan WiFi interface found"
+		echo "No external scan WiFi interface found" >&2
 		return 1
 	}
 	ip link set "$iface" up 2>/dev/null || ifconfig "$iface" up 2>/dev/null || true
@@ -3258,7 +3268,13 @@ ensure_scan_wifi() {
 
 scan_with_iw() {
 	iface=$1
-	iw_scan "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*SSID: //p' | sed '/^$/d' | sort -u
+	tmp=/tmp/x-chip-iw-scan.$$
+	if ! iw_scan "$iface" >"$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		return 1
+	fi
+	sed -n 's/^[[:space:]]*SSID: //p' "$tmp" | sed '/^$/d' | sort -u
+	rm -f "$tmp"
 }
 
 iw_scan() {
@@ -3298,7 +3314,11 @@ scan_networks() {
 
 scan_report() {
 	iface=${1:-}
-	[ -n "$iface" ] || iface=$(ensure_scan_wifi)
+	if [ -z "$iface" ]; then
+		if ! iface=$(ensure_scan_wifi); then
+			return 1
+		fi
+	fi
 	echo "Scan interface: $iface ($(iface_driver "$iface"))"
 	echo
 	if command -v iw >/dev/null 2>&1; then
@@ -3329,6 +3349,8 @@ save_network() {
 	ssid=$1
 	psk=$2
 	tmp=/tmp/x-chip-wpa.$$
+	old_umask=$(umask)
+	umask 077
 	ssid_escaped=$(escape_conf "$ssid")
 	{
 		echo "ctrl_interface=/var/run/wpa_supplicant"
@@ -3346,6 +3368,7 @@ save_network() {
 		fi
 		echo "}"
 	} >"$tmp"
+	umask "$old_umask"
 	write_root_file "$tmp" "$CONF"
 	rm -f "$tmp"
 	if command -v filetool.sh >/dev/null 2>&1; then
@@ -4330,6 +4353,7 @@ capture_tap() {
 	echo "Tap $label on the PocketCHIP screen..." >&2
 	xinput test-xi2 --root "$DEVICE" >"$out" 2>>"$LOG" &
 	xinput_pid=$!
+	start=$(date +%s 2>/dev/null || echo 0)
 	while :; do
 		point="$(extract_point "$out" || true)"
 		if [ -n "$point" ]; then
@@ -4342,6 +4366,12 @@ capture_tap() {
 			wait "$xinput_pid" 2>/dev/null || true
 			point="$(extract_point "$out" || true)"
 			[ -n "$point" ] && printf '%s %s %s %s\n' "$point" "$target_x" "$target_y" "$label"
+			return 0
+		fi
+		now=$(date +%s 2>/dev/null || echo 0)
+		if [ "$start" -gt 0 ] && [ "$now" -ge "$((start + TAP_TIMEOUT))" ]; then
+			kill "$xinput_pid" 2>/dev/null || true
+			wait "$xinput_pid" 2>/dev/null || true
 			return 0
 		fi
 		sleep 1
@@ -5488,6 +5518,20 @@ preseed_tcz_extensions() {
         need_root install -m644 "$tmp" "$dest"
         rm -f "$tmp"
     }
+    verify_tcz_md5() {
+        local pkg=$1 md5file=$2 expected actual
+        [ -s "$md5file" ] || return 0
+        command -v md5sum >/dev/null || { echo "ERROR: md5sum is required to verify $pkg" >&2; exit 1; }
+        expected=$(awk '{ print $1; exit }' "$md5file")
+        [ -n "$expected" ] || return 0
+        actual=$(md5sum "$optional/$pkg" | awk '{ print $1 }')
+        [ "$actual" = "$expected" ] || {
+            echo "ERROR: md5 mismatch for $pkg" >&2
+            echo "expected: $expected" >&2
+            echo "actual:   $actual" >&2
+            exit 1
+        }
+    }
 
     scrub_kernel_placeholder_deps() {
         local depfile=$1 tmp
@@ -5520,6 +5564,7 @@ preseed_tcz_extensions() {
         download_optional "$TCZ_REPO/$pkg.dep" "$optional/$pkg.dep" || true
         scrub_kernel_placeholder_deps "$optional/$pkg.dep"
         download_optional "$TCZ_REPO/$pkg.md5.txt" "$optional/$pkg.md5.txt" || true
+        verify_tcz_md5 "$pkg" "$optional/$pkg.md5.txt"
         download_optional "$TCZ_REPO/$pkg.info" "$optional/$pkg.info" || true
 
         if [ -s "$optional/$pkg.dep" ]; then

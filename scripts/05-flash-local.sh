@@ -87,14 +87,45 @@ require_file() {
     }
 }
 
+verify_sha256() {
+    local file=$1 expected=$2 actual
+    [ -n "$expected" ] || return 0
+    actual=$(sha256sum "$file" | awk '{ print $1 }')
+    [ "$actual" = "$expected" ] || {
+        echo "sha256 mismatch: $file" >&2
+        echo "expected: $expected" >&2
+        echo "actual:   $actual" >&2
+        exit 1
+    }
+}
+
+download_file() {
+    local url=$1 dest=$2 expected_sha=${3:-} tmp
+    tmp="$dest.part.$$"
+    rm -f "$tmp"
+    if curl -fL --remove-on-error -o "$tmp" "$url"; then
+        [ -s "$tmp" ] || { echo "empty download: $url" >&2; rm -f "$tmp"; exit 1; }
+        verify_sha256 "$tmp" "$expected_sha"
+        mv -f "$tmp" "$dest"
+    else
+        rm -f "$tmp"
+        exit 1
+    fi
+}
+
 download_latest_asset() {
-    local repo=$1 pattern=$2 dest=$3 tag url name
-    [ -f "$dest" ] && return 0
+    local repo=$1 pattern=$2 dest=$3 tag=${4:-} expected_sha=${5:-} url name
+    if [ -f "$dest" ]; then
+        verify_sha256 "$dest" "$expected_sha"
+        return 0
+    fi
     mkdir -p "$(dirname "$dest")"
 
     echo ">> downloading missing $pattern from $repo"
-    tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
-        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+    if [ -z "$tag" ]; then
+        tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
+            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+    fi
     [ -n "$tag" ] || { echo "could not resolve latest release for $repo" >&2; exit 1; }
 
     url=$(
@@ -108,7 +139,7 @@ download_latest_asset() {
         done
     )
     [ -n "$url" ] || { echo "could not find $pattern in $repo release $tag" >&2; exit 1; }
-    curl -fL -o "$dest" "$url"
+    download_file "$url" "$dest" "$expected_sha"
 }
 
 echo ">> local tools: $TOOLS_DIR"
@@ -121,11 +152,11 @@ done
 sudo -n true
 
 cd "$TOOLS_DIR"
-download_latest_asset nextthingco/x-chip-tools initrd.uimage .images/initrd.uimage
-download_latest_asset nextthingco/x-chip-uboot sunxi-spl.bin .images/uboot/sunxi-spl.bin
-download_latest_asset nextthingco/x-chip-uboot u-boot-dtb.bin .images/uboot/u-boot-dtb.bin
-download_latest_asset nextthingco/x-chip-uboot u-boot-sunxi-with-spl.bin .images/uboot/u-boot-sunxi-with-spl.bin
-download_latest_asset nextthingco/x-chip-os pocketchip-rootfs.tar.gz .images/pocketchip-rootfs.tar.gz
+download_latest_asset nextthingco/x-chip-tools initrd.uimage .images/initrd.uimage "${X_CHIP_TOOLS_RELEASE_TAG:-}" "${X_CHIP_INITRD_SHA256:-}"
+download_latest_asset nextthingco/x-chip-uboot sunxi-spl.bin .images/uboot/sunxi-spl.bin "${X_CHIP_UBOOT_RELEASE_TAG:-}" "${X_CHIP_SPL_SHA256:-}"
+download_latest_asset nextthingco/x-chip-uboot u-boot-dtb.bin .images/uboot/u-boot-dtb.bin "${X_CHIP_UBOOT_RELEASE_TAG:-}" "${X_CHIP_UBOOT_DTB_SHA256:-}"
+download_latest_asset nextthingco/x-chip-uboot u-boot-sunxi-with-spl.bin .images/uboot/u-boot-sunxi-with-spl.bin "${X_CHIP_UBOOT_RELEASE_TAG:-}" "${X_CHIP_UBOOT_WITH_SPL_SHA256:-}"
+download_latest_asset nextthingco/x-chip-os pocketchip-rootfs.tar.gz .images/pocketchip-rootfs.tar.gz "${X_CHIP_OS_RELEASE_TAG:-}" "${X_CHIP_POCKETCHIP_ROOTFS_SHA256:-}"
 
 require_file ".images/initrd.uimage"
 require_file ".images/uboot/u-boot-sunxi-with-spl.bin"

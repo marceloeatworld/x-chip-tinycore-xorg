@@ -25,6 +25,30 @@ resolve_path() {
         *)  printf '%s\n' "$HERE/$1" ;;
     esac
 }
+verify_sha256() {
+    local file=$1 expected=$2 actual
+    [ -n "$expected" ] || return 0
+    actual=$(sha256sum "$file" | awk '{ print $1 }')
+    [ "$actual" = "$expected" ] || {
+        echo "ERROR: sha256 mismatch for $file" >&2
+        echo "expected: $expected" >&2
+        echo "actual:   $actual" >&2
+        exit 1
+    }
+}
+download_file() {
+    local url=$1 dest=$2 expected_sha=${3:-} tmp
+    tmp="$dest.part.$$"
+    rm -f "$tmp"
+    if curl -fSL --remove-on-error -o "$tmp" "$url"; then
+        [ -s "$tmp" ] || { echo "ERROR: empty download: $url" >&2; rm -f "$tmp"; exit 1; }
+        verify_sha256 "$tmp" "$expected_sha"
+        mv -f "$tmp" "$dest"
+    else
+        rm -f "$tmp"
+        exit 1
+    fi
+}
 
 [ -d build/rootfs ] || { echo "run 'make base' first (build/rootfs missing)" >&2; exit 1; }
 for required in bin/busybox sbin/init init etc/inittab etc/init.d/tc-config; do
@@ -38,8 +62,12 @@ done
 cd build
 TARBALL="linux-${KERNEL_VERSION}.tar.xz"
 SRC="linux-${KERNEL_VERSION}"
-[ -f "$TARBALL" ] || curl -fSL -o "$TARBALL" \
-    "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}.x/${TARBALL}"
+KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}.x/${TARBALL}"
+if [ -f "$TARBALL" ]; then
+    verify_sha256 "$TARBALL" "${KERNEL_TARBALL_SHA256:-}"
+else
+    download_file "$KERNEL_URL" "$TARBALL" "${KERNEL_TARBALL_SHA256:-}"
+fi
 [ -d "$SRC" ] || tar xf "$TARBALL"
 cd "$SRC"
 
@@ -47,6 +75,11 @@ cd "$SRC"
 # on >= 5.16 so it is skipped; apply the DRM color + i2c-shutdown fixes,
 # tolerating an already-patched tree.
 PATCHDIR=$(resolve_path "$CHIP_KERNEL_PATCHES")
+[ -d "$PATCHDIR" ] || {
+    echo "ERROR: CHIP kernel patch directory missing: $PATCHDIR" >&2
+    echo "Run make deps or set CHIP_KERNEL_PATCHES." >&2
+    exit 1
+}
 for p in "$PATCHDIR"/0001-drm-*.patch "$PATCHDIR"/0001-i2c-*.patch; do
     [ -f "$p" ] || continue
     if patch -p1 -N --dry-run <"$p" >/dev/null 2>&1; then
@@ -110,7 +143,7 @@ fi
 
 compile_overlay() {
     local src=$1 out=$2 tmp dtbo
-    [ -f "$src" ] || return 0
+    [ -f "$src" ] || { echo "ERROR: missing DT overlay source: $src" >&2; exit 1; }
     command -v cpp >/dev/null || { echo "need cpp to compile DT overlays" >&2; exit 1; }
     tmp=$(mktemp)
     dtbo=$(mktemp)
@@ -138,13 +171,16 @@ materialize_lib_firmware() {
 }
 
 OVERLAY_DIR=$(resolve_path "$CHIP_DTS_DIR")
-if [ -d "$OVERLAY_DIR" ]; then
-    materialize_lib_firmware
-    need_root install -d "$RFS/lib/firmware/nextthingco/chip/early"
-    compile_overlay "$OVERLAY_DIR/dip-9d011a-1.dts" x-chip-pocketchip.dtbo
-    compile_overlay "$OVERLAY_DIR/dip-9d011a-2.dts" x-chip-dip-vga.dtbo
-    compile_overlay "$OVERLAY_DIR/dip-9d011a-3.dts" x-chip-dip-hdmi.dtbo
-fi
+[ -d "$OVERLAY_DIR" ] || {
+    echo "ERROR: CHIP device-tree overlay directory missing: $OVERLAY_DIR" >&2
+    echo "Run make deps or set CHIP_DTS_DIR." >&2
+    exit 1
+}
+materialize_lib_firmware
+need_root install -d "$RFS/lib/firmware/nextthingco/chip/early"
+compile_overlay "$OVERLAY_DIR/dip-9d011a-1.dts" x-chip-pocketchip.dtbo
+compile_overlay "$OVERLAY_DIR/dip-9d011a-2.dts" x-chip-dip-vga.dtbo
+compile_overlay "$OVERLAY_DIR/dip-9d011a-3.dts" x-chip-dip-hdmi.dtbo
 
 need_root make ARCH=arm INSTALL_MOD_PATH="$RFS" modules_install
 

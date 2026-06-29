@@ -65,6 +65,19 @@ apt_install() {
     apt-get install -y --no-install-recommends "$@"
 }
 
+download_file() {
+    local url=$1 dest=$2 tmp
+    tmp="$dest.part.$$"
+    rm -f "$tmp"
+    if wget -q -O "$tmp" "$url"; then
+        [ -s "$tmp" ] || { echo "ERROR: empty download: $url" >&2; rm -f "$tmp"; exit 1; }
+        mv -f "$tmp" "$dest"
+    else
+        rm -f "$tmp"
+        exit 1
+    fi
+}
+
 install_common_tools() {
     apt_install ca-certificates build-essential crossbuild-essential-armhf \
         file squashfs-tools xz-utils
@@ -177,7 +190,7 @@ build_sunvox() {
     rm -rf "$work"
     mkdir -p "$work"
 
-    wget -q -O "$archive" "$SUNVOX_URL"
+    download_file "$SUNVOX_URL" "$archive"
     unzip -q "$archive" -d "$work/src"
 
     [ -x "$src/sunvox/linux_arm/sunvox" ] || {
@@ -338,7 +351,7 @@ build_warmplace_boot_pixicode_app() {
     rm -rf "$work"
     mkdir -p "$work"
 
-    wget -q -O "$archive" "$url"
+    download_file "$url" "$archive"
     unzip -q "$archive" -d "$work/src"
 
     [ -x "$src/bin/pixilang_linux_arm_armhf" ] || {
@@ -438,7 +451,7 @@ build_pixilang() {
     rm -rf "$work"
     mkdir -p "$work"
 
-    wget -q -O "$archive" "$PIXILANG_URL"
+    download_file "$PIXILANG_URL" "$archive"
     unzip -q "$archive" -d "$work/src"
 
     [ -x "$src/bin/linux_arm/pixilang_no_opengl" ] || {
@@ -946,8 +959,7 @@ build_doom() {
         make -j"$JOBS"
     )
 
-    wget -q -O "$freedoom_zip" \
-        "https://github.com/freedoom/freedoom/releases/download/v$FREEDOOM_VERSION/freedoom-$FREEDOOM_VERSION.zip"
+    download_file "https://github.com/freedoom/freedoom/releases/download/v$FREEDOOM_VERSION/freedoom-$FREEDOOM_VERSION.zip" "$freedoom_zip"
     mkdir -p "$freedoom_dir"
     unzip -q "$freedoom_zip" -d "$freedoom_dir"
 

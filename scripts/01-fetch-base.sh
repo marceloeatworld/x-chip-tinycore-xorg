@@ -19,6 +19,32 @@ need_root() {
     fi
 }
 
+verify_sha256() {
+    local file=$1 expected=$2 actual
+    [ -n "$expected" ] || return 0
+    actual=$(sha256sum "$file" | awk '{ print $1 }')
+    [ "$actual" = "$expected" ] || {
+        echo "ERROR: sha256 mismatch for $file" >&2
+        echo "expected: $expected" >&2
+        echo "actual:   $actual" >&2
+        exit 1
+    }
+}
+
+download_file() {
+    local url=$1 dest=$2 expected_sha=${3:-} tmp
+    tmp="$dest.part.$$"
+    rm -f "$tmp"
+    if curl -fSL --remove-on-error -o "$tmp" "$url"; then
+        [ -s "$tmp" ] || { echo "ERROR: empty download: $url" >&2; rm -f "$tmp"; exit 1; }
+        verify_sha256 "$tmp" "$expected_sha"
+        mv -f "$tmp" "$dest"
+    else
+        rm -f "$tmp"
+        exit 1
+    fi
+}
+
 validate_corepure_base() {
     local missing=0 required
     for required in \
@@ -90,7 +116,11 @@ extract_corepure_rootfs() {
 mkdir -p build && cd build
 
 BASE_FILE=${TINYCORE_BASE_FILE:-$(basename "$TINYCORE_BASE_URL")}
-[ -f "$BASE_FILE" ] || curl -fSL -o "$BASE_FILE" "$TINYCORE_BASE_URL"
+if [ -f "$BASE_FILE" ]; then
+    verify_sha256 "$BASE_FILE" "${TINYCORE_BASE_SHA256:-}"
+else
+    download_file "$TINYCORE_BASE_URL" "$BASE_FILE" "${TINYCORE_BASE_SHA256:-}"
+fi
 
 clean_generated_dir base
 clean_generated_dir extracted

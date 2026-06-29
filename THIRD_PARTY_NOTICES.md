@@ -28,6 +28,14 @@ Optional community `.tcz` extras are built only when requested with
 - GoatTracker from Debian source package `goattracker`.
   Upstream: `https://cadaver.github.io/tools.html`.
   License: GPL-2-or-later, as provided by the Debian source package.
+- SunVox from `https://warmplace.ru/soft/sunvox/`.
+  License: see the license terms included in the upstream WarmPlace archive.
+- PixiTracker and PixiTracker 1Bit from `https://warmplace.ru/soft/pixitracker/`.
+  License: see the license terms included in the upstream WarmPlace archives.
+- Pixilang from `https://warmplace.ru/soft/pixilang/`.
+  License: see the license terms included in the upstream WarmPlace archive.
+- Virtual ANS from `https://warmplace.ru/soft/ans/`.
+  License: see the license terms included in the upstream WarmPlace archive.
 - mGBA from `https://github.com/mgba-emu/mgba`.
   License: MPL-2.0, as provided by the upstream source tree.
 - Chocolate Doom from `https://github.com/chocolate-doom/chocolate-doom`.

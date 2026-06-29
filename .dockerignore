@@ -1,0 +1,11 @@
+.git
+.agents
+.codex
+build
+dist
+result
+secrets.env
+xorg-rootfs.tar.gz
+*.part
+*.tmp
+*.log

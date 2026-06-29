@@ -95,6 +95,22 @@ ssh_user=$SSH_USER
 ssh_password_auth=$ssh_password_auth
 EOF
 
+if [ "${ALLOW_PERSONAL_RELEASE:-0}" = 1 ]; then
+    access_notes="Personal image metadata:
+WiFi config included: $has_wifi
+SSH authorized_keys bytes: $auth_bytes
+SSH password login enabled: $ssh_password_auth
+
+Do not publish this image unless you intentionally want to distribute those credentials."
+else
+    access_notes="Public images contain no WiFi PSK and no SSH authorized key.
+SSH password login is enabled for user \"$SSH_USER\".
+Default public password: chip
+Change it after first login with: passwd
+
+For automatic WiFi or key-only SSH, build a personal image from source with secrets.env."
+fi
+
 cat >"$release_dir/README-release.txt" <<EOF
 x-chip-tinycore-xorg PocketCHIP rootfs image
 
@@ -116,12 +132,7 @@ Flash through another Linux host:
 
 After flashing, remove the FEL jumper and reboot.
 
-Public images contain no WiFi PSK and no SSH authorized key.
-SSH password login is enabled for user "$SSH_USER".
-Default public password: chip
-Change it after first login with: passwd
-
-For automatic WiFi or key-only SSH, build a personal image from source with secrets.env.
+$access_notes
 EOF
 
 echo ">> release package: $release_dir"

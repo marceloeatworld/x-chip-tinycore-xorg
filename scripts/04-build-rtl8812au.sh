@@ -32,6 +32,9 @@ if [ ! -d "$SRC/.git" ]; then
     git clone "$RTL8812AU_REPO" "$SRC"
 fi
 
+if ! git -C "$SRC" cat-file -e "$RTL8812AU_COMMIT^{commit}" 2>/dev/null; then
+    git -C "$SRC" fetch --tags origin "$RTL8812AU_COMMIT"
+fi
 git -C "$SRC" checkout -f "$RTL8812AU_COMMIT"
 git -C "$SRC" clean -fdx
 

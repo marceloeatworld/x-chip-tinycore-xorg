@@ -34,6 +34,10 @@ More live views from the same image:
 | --- | --- | --- |
 | <img src="docs/assets/pocket-readme-screen.png" alt="PocketCHIP TinyCore desktop" width="240"> | <img src="docs/assets/pocket-readme-dillo.png" alt="Dillo on PocketCHIP TinyCore" width="240"> | <img src="docs/assets/pocket-readme-game.png" alt="Game menu on PocketCHIP TinyCore" width="240"> |
 
+Doom running fullscreen through Chocolate Doom and Freedoom:
+
+<img src="docs/assets/pocket-readme-doom.png" alt="Doom fullscreen on PocketCHIP TinyCore" width="480">
+
 ## Current Status
 
 Base inherited from the working headless PocketCHIP image:
@@ -356,6 +360,26 @@ PocketCHIP game controls:
 - `Enter` = Start
 - `Backspace` = Select
 
+Doom uses the Chocolate Doom keyboard defaults instead of the emulator A/B
+layout:
+
+- Arrow keys = move forward/back and turn left/right
+- `Right Ctrl` = fire
+- `Space` = use/open doors and switches
+- `Right Shift` = run
+- `Right Alt` = hold strafe
+- `,` / `.` = strafe left/right
+- `1`-`8` = direct weapon select
+- `Tab` = automap
+- `Esc` = menu
+- `Enter` = menu confirm
+- `Backspace` = menu back
+- `Y` / `N` = confirm/cancel prompts
+
+All required Doom actions are mapped by Chocolate Doom defaults. Previous/next
+weapon cycling is not mapped by default; use the direct weapon keys `1`-`8`.
+Doom launches fullscreen by default.
+
 The PocketCHIP Home/Power key closes running games.
 `doom.tcz` includes Freedoom Phase 1, which is a free replacement IWAD; commercial
 Doom WAD files are not bundled. The Doom launcher defaults to silent audio on
@@ -448,6 +472,10 @@ scripts/09-build-community-tcz.sh
 - Lightweight display config: `/usr/local/etc/x-chip/display.conf`
 - Desktop autostart config: `/usr/local/etc/x-chip/desktop.conf`
 - Desktop stats config: `/usr/local/etc/x-chip/desktop-stats.conf`
+- TinyCore base image checksum: `TINYCORE_BASE_SHA256`
+- Optional kernel tarball checksum override: `KERNEL_TARBALL_SHA256`
+- Pinned flash release tags: `X_CHIP_TOOLS_RELEASE_TAG`,
+  `X_CHIP_UBOOT_RELEASE_TAG`, `X_CHIP_OS_RELEASE_TAG`
 - WiFi role config: `/usr/local/etc/x-chip/wifi.conf`
 - Internal WiFi: RTL8723BS, client/default-route role
 - External USB WiFi: RTL8812AU, optional scan role when plugged in
