@@ -71,7 +71,7 @@ the PocketCHIP NAND rootfs.
 
 For this tutorial release, the helper script downloads from:
 
-<https://github.com/marceloeatworld/x-chip-tinycore-xorg/releases/tag/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc-2026-06-29>
+<https://github.com/marceloeatworld/x-chip-tinycore-xorg/releases/tag/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc-2026-07-01>
 
 On Ubuntu/Debian, copy and paste:
 
@@ -102,6 +102,13 @@ values manually.
 
 On other Linux distros, run `./scripts/flash-release-pocketchip.sh`. If automatic
 package install is unavailable, it prints the missing command names.
+
+If the script reports a missing NAND SPL image builder, the host flashing tools
+are incomplete. The old `x-chip-tools` code calls the tool
+`sunxi-nand-image-builder`; many Ubuntu/Debian `sunxi-tools` packages install
+`sunxi-fel` but not that old misc tool. Newer U-Boot builds provide the same
+builder as `sunxi-spl-image-builder`. The flash scripts accept either command
+name, and also honor `SNIB=/path/to/tool` for a custom build.
 
 To test the download, SHA check, and command detection without writing NAND:
 
@@ -556,6 +563,10 @@ it with the default Linux console map from the kernel tree being built, then
 converts the complete result to BusyBox `loadkmap` format. Converting the
 PocketCHIP overlay by itself is rejected because it breaks normal letter and
 number keys.
+
+The Xorg desktop applies the matching Fn layer with `x-chip-x-keymap`, using
+`/usr/local/share/x-chip/xorg/pocketchip.xmodmap`, so PocketCHIP Fn shortcuts
+work inside JWM as well as on the console.
 
 ## Local Secrets
 

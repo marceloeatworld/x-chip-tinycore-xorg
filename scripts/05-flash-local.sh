@@ -87,6 +87,36 @@ require_file() {
     }
 }
 
+select_sunxi_nand_builder() {
+    if [ -n "${SNIB:-}" ]; then
+        require_cmd "$SNIB"
+        export SNIB
+        echo ">> using NAND SPL image builder: $SNIB"
+        return 0
+    fi
+
+    if command -v sunxi-nand-image-builder >/dev/null 2>&1; then
+        SNIB=sunxi-nand-image-builder
+    elif command -v sunxi-spl-image-builder >/dev/null 2>&1; then
+        SNIB=sunxi-spl-image-builder
+    else
+        cat >&2 <<'EOF'
+missing required NAND SPL image builder:
+  expected one of:
+    sunxi-nand-image-builder
+    sunxi-spl-image-builder
+
+Ubuntu/Debian sunxi-tools packages often install sunxi-fel without the old
+sunxi-nand-image-builder misc tool. Build/install either tool and keep it on
+PATH, or set SNIB=/path/to/tool.
+EOF
+        exit 1
+    fi
+
+    export SNIB
+    echo ">> using NAND SPL image builder: $SNIB"
+}
+
 verify_sha256() {
     local file=$1 expected=$2 actual
     [ -n "$expected" ] || return 0
@@ -156,9 +186,10 @@ echo ">> local tools: $TOOLS_DIR"
 echo ">> local rootfs: $ROOTFS"
 echo ">> local sha256: $(sha256sum "$ROOTFS" | awk '{print $1}')"
 
-for cmd in sha256sum tar ssh ping ip dd mkimage sunxi-fel sunxi-nand-image-builder curl; do
+for cmd in sha256sum tar ssh ping ip dd mkimage sunxi-fel curl; do
     require_cmd "$cmd"
 done
+select_sunxi_nand_builder
 sudo -n true
 
 cd "$TOOLS_DIR"
@@ -321,6 +352,7 @@ echo ">> flashing TinyCore rootfs"
 start_installer_usb_ip_watchdog
 flash_status=0
 sudo -n env PATH="$PATH" \
+    SNIB="$SNIB" \
     ZIMAGE="$ZIMAGE" \
     DTB="$DTB" \
     UBOOT="$TOOLS_DIR/.images/uboot/u-boot-sunxi-with-spl.bin" \

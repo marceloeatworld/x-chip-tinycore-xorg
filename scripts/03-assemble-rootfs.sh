@@ -3887,6 +3887,7 @@ start_x_session() {
 		else
 			wait_for_x_ready || true
 			DISPLAY=:0 x-chip-x-apply-calibration >/tmp/x-chip-x-calibration.log 2>&1 || true
+			DISPLAY=:0 x-chip-x-keymap >/tmp/x-chip-x-keymap.log 2>&1 || true
 			if pidof "$X_CHIP_WM" >/dev/null 2>&1; then
 				[ "$X_CHIP_WM" = jwm ] && DISPLAY=:0 jwm -restart >/tmp/jwm-restart.log 2>&1 || true
 			elif id "$TC_USER" >/dev/null 2>&1; then
@@ -4558,6 +4559,56 @@ print_fit_error "$matrix"
 echo "File: $MATRIX_FILE"
 EOF
 
+    install_text 0644 "$RFS/usr/local/share/x-chip/xorg/pocketchip.xmodmap" <<'EOF'
+! PocketCHIP internal keyboard Fn layer for X11.
+! The console map treats the physical Fn key as AltGr; X11 needs its own map.
+remove mod1 = Alt_R Meta_R
+keycode 108 = Mode_switch
+add mod5 = Mode_switch
+keycode 10 = 1 exclam F1 F1
+keycode 11 = 2 at F2 F2
+keycode 12 = 3 numbersign F3 F3
+keycode 13 = 4 dollar F4 F4
+keycode 14 = 5 percent F5 F5
+keycode 15 = 6 asciicircum F6 F6
+keycode 16 = 7 ampersand F7 F7
+keycode 17 = 8 asterisk F8 F8
+keycode 18 = 9 parenleft F9 F9
+keycode 19 = 0 parenright F10 F10
+keycode 82 = KP_Subtract underscore F11 F11
+keycode 21 = equal plus F12 F12
+keycode 29 = y Y braceleft braceleft
+keycode 30 = u U braceright braceright
+keycode 31 = i I bracketleft bracketleft
+keycode 32 = o O bracketright bracketright
+keycode 33 = p P bar bar
+keycode 43 = h H less less
+keycode 44 = j J greater greater
+keycode 45 = k K apostrophe apostrophe
+keycode 46 = l L quotedbl quotedbl
+keycode 56 = b B grave grave
+keycode 57 = n N asciitilde asciitilde
+keycode 58 = m M colon colon
+keycode 60 = period greater semicolon semicolon
+keycode 61 = slash question backslash backslash
+EOF
+
+    install_text 0755 "$RFS/usr/local/bin/x-chip-x-keymap" <<'EOF'
+#!/bin/sh
+set -eu
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export DISPLAY=${DISPLAY:-:0}
+
+MAP=${X_CHIP_X_KEYMAP:-/usr/local/share/x-chip/xorg/pocketchip.xmodmap}
+LOG=${X_CHIP_X_KEYMAP_LOG:-/tmp/x-chip-x-keymap.log}
+
+[ -r "$MAP" ] || exit 0
+command -v xmodmap >/dev/null 2>&1 || exit 0
+
+xmodmap "$MAP" >"$LOG" 2>&1
+EOF
+
     install_text 0755 "$RFS/usr/local/bin/x-chip-xorg-session" <<'EOF'
 #!/bin/sh
 set -eu
@@ -4567,6 +4618,7 @@ export DISPLAY=${DISPLAY:-:0}
 X_CHIP_WM=${X_CHIP_WM:-jwm}
 
 x-chip-x-apply-calibration >/tmp/x-chip-x-calibration.log 2>&1 || true
+x-chip-x-keymap >/tmp/x-chip-x-keymap.log 2>&1 || true
 xset -dpms s off 2>/dev/null || true
 if [ -f "$HOME/.Xdefaults" ] && command -v xrdb >/dev/null 2>&1; then
 	xrdb -merge "$HOME/.Xdefaults" >/tmp/xrdb.log 2>&1 || true
@@ -6365,6 +6417,7 @@ EOF
         "usr/local/bin/x-chip-close-game" \
         "usr/local/bin/x-chip-game-launch" \
         "usr/local/bin/x-chip-x-apply-calibration" \
+        "usr/local/bin/x-chip-x-keymap" \
         "usr/local/bin/x-chip-touch-calibrate" \
         "usr/local/bin/x-chip-xorg-launch-vt" \
         "usr/local/bin/x-chip-xorg-session" \
@@ -6375,6 +6428,7 @@ EOF
         "usr/local/share/x-chip/tic80-carts.tsv" \
         "usr/local/share/x-chip/gameboy-homebrew.tsv" \
         "usr/local/share/x-chip/xorg/touchscreen-calibration.matrix" \
+        "usr/local/share/x-chip/xorg/pocketchip.xmodmap" \
         "usr/local/sbin/x-chip-rtl8812au-hotplug" \
         "opt/x-chip-boot.sh" \
         "opt/x-chip-autologin.sh" \

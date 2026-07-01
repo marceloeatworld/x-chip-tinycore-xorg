@@ -9,7 +9,7 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 cd "$HERE"
 source ./config.env
 
-DEFAULT_RELEASE_TAG="${PROJECT_REPO_NAME}-pocketchip-${KERNEL_VERSION}${KERNEL_LOCALVERSION}-2026-06-29"
+DEFAULT_RELEASE_TAG="${PROJECT_REPO_NAME}-pocketchip-${KERNEL_VERSION}${KERNEL_LOCALVERSION}-2026-07-01"
 RELEASE_TAG=${RELEASE_TAG:-$DEFAULT_RELEASE_TAG}
 RELEASE_REPO=${RELEASE_REPO:-${PROJECT_GITHUB_OWNER}/${PROJECT_REPO_NAME}}
 RELEASE_NAME=${RELEASE_NAME:-${PROJECT_REPO_NAME}-pocketchip-${KERNEL_VERSION}${KERNEL_LOCALVERSION}}
@@ -155,11 +155,15 @@ On Debian/Ubuntu this is usually close to:
   sudo apt-get install git curl ca-certificates openssh-client iproute2 iputils-ping u-boot-tools sunxi-tools
 
 The required command names are:
-  git curl sha256sum sudo tar ssh ping ip dd mkimage sunxi-fel sunxi-nand-image-builder
+  git curl sha256sum sudo tar ssh ping ip dd mkimage sunxi-fel
 
-If your distro's sunxi-tools package does not include
-sunxi-nand-image-builder, install a sunxi-tools build that provides it and keep
-it on PATH.
+The NAND SPL image builder may be installed under either name:
+  sunxi-nand-image-builder  old linux-sunxi/sunxi-tools misc tool
+  sunxi-spl-image-builder   current U-Boot host tool
+
+Ubuntu/Debian sunxi-tools packages often provide sunxi-fel but not the old
+sunxi-nand-image-builder misc tool. This script accepts either name. If neither
+exists, build one from source and keep it on PATH, or set SNIB=/path/to/tool.
 EOF
 }
 
@@ -229,6 +233,44 @@ EOF
     fi
 }
 
+select_sunxi_nand_builder() {
+    if [ -n "${SNIB:-}" ]; then
+        need_cmd "$SNIB" || {
+            echo "SNIB is set but not executable or not on PATH: $SNIB" >&2
+            exit 1
+        }
+        export SNIB
+        echo ">> using NAND SPL image builder: $SNIB"
+        return 0
+    fi
+
+    if need_cmd sunxi-nand-image-builder; then
+        SNIB=sunxi-nand-image-builder
+    elif need_cmd sunxi-spl-image-builder; then
+        SNIB=sunxi-spl-image-builder
+    else
+        cat >&2 <<'EOF'
+missing required NAND SPL image builder:
+  expected one of:
+    sunxi-nand-image-builder
+    sunxi-spl-image-builder
+
+Why this happens:
+  sunxi-nand-image-builder is the old linux-sunxi/sunxi-tools misc tool used by
+  x-chip-tools. Many Ubuntu/Debian sunxi-tools packages install sunxi-fel but do
+  not install that misc tool. Newer U-Boot builds provide the same host tool as
+  sunxi-spl-image-builder.
+
+Fix:
+  install/build either tool and keep it on PATH, or set SNIB=/path/to/tool.
+EOF
+        exit 1
+    fi
+
+    export SNIB
+    echo ">> using NAND SPL image builder: $SNIB"
+}
+
 download_asset() {
     local name=$1 dest=$2 url tmp
     if [ -f "$dest" ]; then
@@ -281,7 +323,8 @@ download_release() {
 }
 
 check_flash_commands() {
-    require_commands git curl sha256sum sudo tar ssh ping ip dd mkimage sunxi-fel sunxi-nand-image-builder
+    require_commands git curl sha256sum sudo tar ssh ping ip dd mkimage sunxi-fel
+    select_sunxi_nand_builder
 }
 
 github_release_asset_sha256() {
