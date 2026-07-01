@@ -66,8 +66,14 @@ case "$pack_out" in
     *)  pack_abs=$HERE/$pack_out ;;
 esac
 # Everything in the pack is system-owned root:root in the image; force that
-# here because the staging extract ran unprivileged.
-(cd "$STAGE" && tar --numeric-owner --owner=0 --group=0 -czf "$pack_abs" .)
+# here because the staging extract ran unprivileged. Pack ./* rather than "."
+# so no "./" entry exists: extracting one at -C / would stamp the mktemp 0700
+# mode onto the device's root directory and lock every non-root user out.
+(cd "$STAGE" && tar --numeric-owner --owner=0 --group=0 -czf "$pack_abs" ./*)
+if tar -tzf "$pack_abs" | grep -qx './'; then
+    echo "ERROR: update pack contains a root directory entry" >&2
+    exit 1
+fi
 (cd "$OUT_DIR" && sha256sum "$(basename "$pack_out")" >"$(basename "$pack_out").sha256")
 
 echo ">> update pack: $pack_out ($(wc -l <"$PACK_LIST") members)"

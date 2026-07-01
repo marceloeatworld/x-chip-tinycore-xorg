@@ -6012,8 +6012,15 @@ apply_pack() {
         onboot_saved="$ROOT/tce/onboot.lst.before-update"
         cp "$ROOT/tce/onboot.lst" "$onboot_saved"
     fi
-    log "applying update pack"
-    tar -xzf "$PACK" -C "${ROOT:-/}"
+    log "applying update pack (file list: $CACHE/last-update.log)"
+    mkdir -p "$CACHE"
+    tar -xzvf "$PACK" -C "${ROOT:-/}" >"$CACHE/last-update.log" 2>&1 || {
+        tail -n 5 "$CACHE/last-update.log" >&2 || true
+        die "extracting the update pack failed; see $CACHE/last-update.log"
+    }
+    log "applied $(wc -l <"$CACHE/last-update.log") files"
+    # Self-heal: a malformed pack must never leave / non-traversable.
+    chmod 755 "${ROOT:-/}" 2>/dev/null || true
     if [ -n "$onboot_saved" ] && [ -f "$ROOT/tce/onboot.lst" ]; then
         # Keep extensions the user added to the boot list.
         while IFS= read -r line; do
