@@ -4936,7 +4936,7 @@ EOF
       <Program label="Images" icon="image.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Images -e x-chip-open-image</Program>
       <Program label="Video" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Video -e x-chip-video</Program>
       <Separator/>
-      <Program label="Links" icon="browser.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Links -e links</Program>
+      <Program label="Links" icon="browser.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Links -e links -ssl.builtin-certificates 1 https://search.brave.com/</Program>
       <Program label="Nano" icon="editor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Nano -e nano</Program>
       <Program label="Midnight Commander" icon="files.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Files -e x-chip-mc</Program>
     </Menu>

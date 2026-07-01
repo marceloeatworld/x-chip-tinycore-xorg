@@ -1136,6 +1136,7 @@ require_content usr/local/share/x-chip/xorg/jwmrc 'label="Files" icon="files.xpm
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Editor" icon="editor.xpm">leafpad'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Code" icon="code.xpm">geany -s -m -p -t'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Calculator" icon="pocket.xpm"'
+require_content usr/local/share/x-chip/xorg/jwmrc 'links -ssl.builtin-certificates 1 https://search.brave.com/'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Images" icon="image.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Music" icon="pocket.xpm"'
 require_content usr/local/share/x-chip/xorg/jwmrc 'label="Music Player" icon="pocket.xpm"'
