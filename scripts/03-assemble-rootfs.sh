@@ -3423,6 +3423,8 @@ restart_wifi() {
 	elif command -v udhcpc >/dev/null 2>&1; then
 		as_root sh -c "udhcpc -i '$iface' -x 'hostname:$HOSTNAME_VALUE' -b >/var/log/udhcpc-$iface.log 2>&1" || true
 	fi
+	# No RTC battery: first WiFi connect is the first chance to get real time.
+	command -v x-chip-time >/dev/null 2>&1 && x-chip-time sync-background >/dev/null 2>&1 || true
 }
 
 show_status() {
@@ -5843,6 +5845,7 @@ install_update_tooling() {
 kernel_release=${KERNEL_VERSION}${KERNEL_LOCALVERSION}
 tinycore_version=$TINYCORE_VERSION
 built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+built_at_epoch=$(date -u +%s)
 EOF
 
     install_text 0755 "$RFS/usr/local/sbin/x-chip-update" <<'XCHIP_UPDATE_EOF'
@@ -5924,6 +5927,20 @@ do_rollback() {
     [ "$restored" = 1 ] || die "no previous kernel/boot backup found"
     sync
     log "previous kernel restored; reboot to use it: sudo reboot"
+}
+
+ensure_clock() {
+    # No RTC battery on the CHIP: after a fresh flash the clock sits in the
+    # past and TLS to GitHub fails with "certificate is not yet valid".
+    build_year=$(sed -n 's/^built_at_utc=\([0-9][0-9][0-9][0-9]\).*/\1/p' "$SHARE/release-info" 2>/dev/null | head -n 1)
+    [ -n "$build_year" ] || build_year=2026
+    [ "$(date -u +%Y)" -lt "$build_year" ] || return 0
+    log "system clock is behind; syncing time first"
+    if command -v x-chip-time >/dev/null 2>&1; then
+        x-chip-time sync >/dev/null 2>&1 || true
+    fi
+    [ "$(date -u +%Y)" -lt "$build_year" ] || return 0
+    die "system clock is wrong and time sync failed; run: sudo x-chip-time sync"
 }
 
 resolve_release() {
@@ -6010,6 +6027,7 @@ main() {
         PACK=$PACK_FILE
         log "applying local pack $PACK_FILE (no sha256 check)"
     else
+        ensure_clock
         resolve_release
         log "installed: $current"
         log "available: $RELEASE_TAG"
@@ -6127,6 +6145,21 @@ ensure_runtime_dirs() {
 	chmod 755 /run /var/run /var/run/dbus /var/run/dhcpcd \
 		/var/run/tcebootload /var/run/wpa_supplicant 2>/dev/null || true
 	chmod 775 /var/lock 2>/dev/null || true
+}
+
+restore_clock_floor() {
+	# No RTC battery: the clock powers up in 1970 and TLS (GitHub, NTP over
+	# HTTPS mirrors) rejects certificates "not yet valid". Floor the clock to
+	# the image build time; NTP refines it once the network is up.
+	epoch=$(sed -n 's/^built_at_epoch=//p' /usr/local/share/x-chip/release-info 2>/dev/null | head -n 1)
+	[ -n "$epoch" ] || return 0
+	now=$(date -u +%s 2>/dev/null || echo 0)
+	[ "$now" -lt "$epoch" ] || return 0
+	date -u -s "@$epoch" >/dev/null 2>&1 || {
+		human=$(sed -n 's/^built_at_utc=//p' /usr/local/share/x-chip/release-info 2>/dev/null | head -n 1 | tr 'T' ' ' | tr -d 'Z')
+		[ -n "$human" ] && date -u -s "$human" >/dev/null 2>&1
+	} || true
+	boot_stamp "Clock floored to image build time"
 }
 
 reset_tce_installed_markers() {
@@ -6533,6 +6566,7 @@ start_ssh() {
 silence_kernel_console
 ensure_devpts
 ensure_runtime_dirs
+restore_clock_floor
 prepare_tce_runtime
 reset_tce_installed_markers
 boot_stamp "Runtime directories and TinyCore state ready"
