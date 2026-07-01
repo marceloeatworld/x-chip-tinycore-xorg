@@ -153,7 +153,7 @@ compile_overlay() {
         -I arch/arm/boot/dts/allwinner \
         -I "$OVERLAY_DIR" \
         "$src" >"$tmp"
-    if [ "$out" = x-chip-pocketchip.dtbo ]; then
+    if [ "$out" = x-chip-pocketchip.dtbo ] || [ "$out" = x-chip-pocketchip-v72.dtbo ]; then
         if grep -q 'interrupts = <6 1 8>;' "$tmp"; then
             :
         elif grep -q 'interrupts = <6 1 2>;' "$tmp"; then
@@ -190,8 +190,13 @@ OVERLAY_DIR=$(resolve_path "$CHIP_DTS_DIR")
 materialize_lib_firmware
 need_root install -d "$RFS/lib/firmware/nextthingco/chip/early"
 compile_overlay "$OVERLAY_DIR/dip-9d011a-1.dts" x-chip-pocketchip.dtbo
+# PocketCHIP keyboard rev v72 (DIP product version 48): same board, different
+# key matrix. boot.scr picks it from the EEPROM product-version byte.
+compile_overlay "$HERE/kernel/dip-9d011a-1-48.dts" x-chip-pocketchip-v72.dtbo
 compile_overlay "$OVERLAY_DIR/dip-9d011a-2.dts" x-chip-dip-vga.dtbo
 compile_overlay "$OVERLAY_DIR/dip-9d011a-3.dts" x-chip-dip-hdmi.dtbo
+# Source Parts Popcorn/Stove HDMI DIP (vendor 0x009d011b, product 10).
+compile_overlay "$OVERLAY_DIR/dip-9d011b-10.dts" x-chip-dip-hdmi-popcorn.dtbo
 
 need_root make ARCH=arm INSTALL_MOD_PATH="$RFS" modules_install
 

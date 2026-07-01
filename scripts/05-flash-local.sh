@@ -288,7 +288,9 @@ grep -a -q 'video=Unknown-1:480x272e' /verify-rootfs/boot/boot.scr
 grep -a -q 'video=Composite-1:d' /verify-rootfs/boot/boot.scr
 grep -a -q 'tce=/tce base' /verify-rootfs/boot/boot.scr
 grep -a -q 'x-chip-pocketchip.dtbo' /verify-rootfs/boot/boot.scr
+grep -a -q 'x-chip-pocketchip-v72.dtbo' /verify-rootfs/boot/boot.scr
 test -f /verify-rootfs/lib/firmware/nextthingco/chip/early/x-chip-pocketchip.dtbo
+test -f /verify-rootfs/lib/firmware/nextthingco/chip/early/x-chip-pocketchip-v72.dtbo
 test -f /verify-rootfs/tce/xorg.lst
 grep -q 'Xorg.tcz' /verify-rootfs/tce/xorg.lst
 grep -q 'xf86-video-fbdev.tcz' /verify-rootfs/tce/xorg.lst

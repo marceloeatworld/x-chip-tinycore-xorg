@@ -3159,6 +3159,11 @@ EOF
 #!/bin/sh
 set -eu
 
+# wpa_supplicant and dhcpcd live in /usr/local/sbin, which is in nobody's
+# default PATH on this image; without this they are simply "not found".
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
 COUNTRY=${WIFI_COUNTRY:-PT}
 HOSTNAME_VALUE=$(cat /etc/hostname 2>/dev/null || hostname 2>/dev/null || echo chip)
 CONF=${X_CHIP_WIFI_CONFIG:-/etc/wpa_supplicant.conf}
@@ -3171,6 +3176,20 @@ CLIENT_DRIVER=${X_CHIP_WIFI_CLIENT_DRIVER:-$CLIENT_DRIVER}
 SCAN_DRIVER=${X_CHIP_WIFI_SCAN_DRIVER:-$SCAN_DRIVER}
 CLIENT_IFACE=${X_CHIP_WIFI_CLIENT_IFACE:-}
 SCAN_IFACE=${X_CHIP_WIFI_SCAN_IFACE:-}
+
+# The menu runs as the desktop user; interface up/down, scans, and the
+# supplicant all need root or they fail silently and the menu reports
+# "No networks found" on a down interface.
+as_root() {
+	if [ "$(id -u)" = 0 ]; then
+		"$@"
+	elif command -v sudo >/dev/null 2>&1; then
+		# sudo may reset PATH and lose /usr/local/sbin; re-export ours.
+		sudo env PATH="$PATH" "$@"
+	else
+		"$@"
+	fi
+}
 
 all_wifi_ifaces() {
 	for iface_path in /sys/class/net/wlan* /sys/class/net/wlp*; do
@@ -3248,8 +3267,8 @@ find_scan_wifi_iface() {
 }
 
 ensure_client_wifi() {
-	modprobe r8723bs rtw_power_mgnt=0 rtw_ips_mode=0 2>/dev/null || modprobe r8723bs 2>/dev/null || true
-	rfkill unblock wifi 2>/dev/null || true
+	as_root modprobe r8723bs rtw_power_mgnt=0 rtw_ips_mode=0 2>/dev/null || as_root modprobe r8723bs 2>/dev/null || true
+	as_root rfkill unblock wifi 2>/dev/null || true
 	i=0
 	while [ "$i" -lt 15 ]; do
 		iface=$(find_client_wifi_iface 2>/dev/null || true)
@@ -3261,13 +3280,13 @@ ensure_client_wifi() {
 		echo "No WiFi interface found" >&2
 		return 1
 	}
-	ip link set "$iface" up 2>/dev/null || ifconfig "$iface" up 2>/dev/null || true
+	as_root ip link set "$iface" up 2>/dev/null || as_root ifconfig "$iface" up 2>/dev/null || true
 	printf '%s\n' "$iface"
 }
 
 ensure_scan_wifi() {
-	modprobe 8812au 2>/dev/null || true
-	rfkill unblock wifi 2>/dev/null || true
+	as_root modprobe 8812au 2>/dev/null || true
+	as_root rfkill unblock wifi 2>/dev/null || true
 	i=0
 	while [ "$i" -lt 10 ]; do
 		iface=$(find_scan_wifi_iface 2>/dev/null || true)
@@ -3279,7 +3298,7 @@ ensure_scan_wifi() {
 		echo "No external scan WiFi interface found" >&2
 		return 1
 	}
-	ip link set "$iface" up 2>/dev/null || ifconfig "$iface" up 2>/dev/null || true
+	as_root ip link set "$iface" up 2>/dev/null || as_root ifconfig "$iface" up 2>/dev/null || true
 	printf '%s\n' "$iface"
 }
 
@@ -3296,13 +3315,7 @@ scan_with_iw() {
 
 iw_scan() {
 	iface=$1
-	if [ "$(id -u)" = 0 ]; then
-		iw dev "$iface" scan
-	elif command -v sudo >/dev/null 2>&1; then
-		sudo iw dev "$iface" scan
-	else
-		iw dev "$iface" scan
-	fi
+	as_root iw dev "$iface" scan
 }
 
 scan_with_iw_verbose() {
@@ -3321,7 +3334,7 @@ scan_with_iw_verbose() {
 
 scan_with_iwlist() {
 	iface=$1
-	iwlist "$iface" scan 2>/dev/null | sed -n 's/.*ESSID:"\(.*\)".*/\1/p' | sed '/^$/d' | sort -u
+	as_root iwlist "$iface" scan 2>/dev/null | sed -n 's/.*ESSID:"\(.*\)".*/\1/p' | sed '/^$/d' | sort -u
 }
 
 scan_networks() {
@@ -3396,19 +3409,19 @@ save_network() {
 restart_wifi() {
 	iface=$1
 	if command -v wpa_cli >/dev/null 2>&1; then
-		wpa_cli -i "$iface" terminate >/dev/null 2>&1 || true
+		as_root wpa_cli -i "$iface" terminate >/dev/null 2>&1 || true
 	else
-		killall wpa_supplicant >/dev/null 2>&1 || true
+		as_root killall wpa_supplicant >/dev/null 2>&1 || true
 	fi
 	sleep 1
-	wpa_supplicant -B -i "$iface" -c "$CONF" >/var/log/wpa_supplicant.log 2>&1 || {
+	as_root sh -c "wpa_supplicant -B -i '$iface' -c '$CONF' >/var/log/wpa_supplicant.log 2>&1" || {
 		echo "wpa_supplicant failed; see /var/log/wpa_supplicant.log"
 		return 1
 	}
 	if command -v dhcpcd >/dev/null 2>&1; then
-		dhcpcd -q -t 20 "$iface" >/var/log/dhcpcd-"$iface".log 2>&1 || true
+		as_root sh -c "dhcpcd -q -t 20 '$iface' >/var/log/dhcpcd-$iface.log 2>&1" || true
 	elif command -v udhcpc >/dev/null 2>&1; then
-		udhcpc -i "$iface" -x "hostname:$HOSTNAME_VALUE" -b >/var/log/udhcpc-"$iface".log 2>&1 || true
+		as_root sh -c "udhcpc -i '$iface' -x 'hostname:$HOSTNAME_VALUE' -b >/var/log/udhcpc-$iface.log 2>&1" || true
 	fi
 }
 
@@ -5022,6 +5035,7 @@ EOF
       <Program label="Keyboard" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Keyboard -e x-chip-term-hold x-chip-keyboard-status</Program>
       <Program label="Audio Status" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Audio -e x-chip-term-hold x-chip-audio-status</Program>
       <Program label="Logs" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Logs -e x-chip-logs</Program>
+      <Program label="System Update" icon="refresh.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Update -e x-chip-term-hold sudo x-chip-update</Program>
     </Menu>
     <Menu label="Touch" icon="touch.xpm">
       <Program label="Apply Calibration" icon="touch.xpm">x-chip-x-apply-calibration</Program>
@@ -5819,6 +5833,216 @@ compile_host_mime_database() {
     update-mime-database "$mime_dir"
 }
 
+install_update_tooling() {
+    need_root install -d "$RFS/usr/local/share/x-chip" "$RFS/usr/local/sbin"
+
+    echo "$PROJECT_GITHUB_OWNER/$PROJECT_REPO_NAME" | need_root tee "$RFS/usr/local/share/x-chip/update-repo" >/dev/null
+    need_root chmod 644 "$RFS/usr/local/share/x-chip/update-repo"
+
+    install_text 0644 "$RFS/usr/local/share/x-chip/release-info" <<EOF
+kernel_release=${KERNEL_VERSION}${KERNEL_LOCALVERSION}
+tinycore_version=$TINYCORE_VERSION
+built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+
+    install_text 0755 "$RFS/usr/local/sbin/x-chip-update" <<'XCHIP_UPDATE_EOF'
+#!/bin/sh
+# x-chip-update: apply an x-chip release "update pack" in place.
+# Updates the kernel, modules, boot files, /opt runtime, x-chip tools, and the
+# project-built .tcz apps. Never touches /home, WiFi config, or SSH keys.
+# TinyCore packages themselves update separately with tce-update.
+set -eu
+
+ROOT=${X_CHIP_UPDATE_ROOT:-}
+SHARE="$ROOT/usr/local/share/x-chip"
+MARKER="$SHARE/applied-release"
+CACHE="$ROOT/tce/updates"
+REPO=${X_CHIP_UPDATE_REPO:-$(cat "$SHARE/update-repo" 2>/dev/null || true)}
+API=https://api.github.com
+
+# Kernel/boot files backed up as .prev before every update, for --rollback.
+KERNEL_BACKUP_FILES="boot/zImage boot/sun5i-r8-chip.dtb boot/boot.scr"
+
+CHECK=0
+YES=0
+ROLLBACK=0
+TAG=
+PACK_FILE=
+RELEASE_TAG=
+PACK_ASSET=
+PACK=
+
+usage() {
+    cat <<USAGE
+usage: x-chip-update [options]
+
+Downloads the latest release update pack and applies it in place.
+User files in /home, WiFi config, and SSH keys are never touched.
+
+Options:
+  --check       only report whether an update is available
+  --yes         apply without asking for confirmation
+  --tag TAG     apply a specific release instead of the latest
+  --file PACK   apply a local .update.tar.gz (no download, no sha256 check)
+  --rollback    restore the kernel/boot files saved before the last update
+  -h, --help    show this help
+USAGE
+}
+
+log() { echo ">> $*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --check) CHECK=1 ;;
+        --yes) YES=1 ;;
+        --rollback) ROLLBACK=1 ;;
+        --tag) TAG=${2:?missing value for --tag}; shift ;;
+        --file) PACK_FILE=${2:?missing value for --file}; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+require_root() {
+    # X_CHIP_UPDATE_ROOT set means a test/fake-root run, not the live system.
+    [ -n "$ROOT" ] && return 0
+    [ "$(id -u)" = 0 ] || die "run as root: sudo x-chip-update"
+}
+
+do_rollback() {
+    require_root
+    restored=0
+    for f in $KERNEL_BACKUP_FILES; do
+        if [ -f "$ROOT/$f.prev" ]; then
+            cp -p "$ROOT/$f.prev" "$ROOT/$f"
+            restored=1
+            log "restored $f"
+        fi
+    done
+    [ "$restored" = 1 ] || die "no previous kernel/boot backup found"
+    sync
+    log "previous kernel restored; reboot to use it: sudo reboot"
+}
+
+resolve_release() {
+    command -v curl >/dev/null 2>&1 || die "curl is missing; run: tce-load -wil curl"
+    [ -n "$REPO" ] || die "no update repository configured in $SHARE/update-repo"
+    if [ -n "$TAG" ]; then
+        url="$API/repos/$REPO/releases/tags/$TAG"
+    else
+        url="$API/repos/$REPO/releases/latest"
+    fi
+    json=$(curl -fsSL "$url") || die "cannot reach the GitHub API (is WiFi up?)"
+    RELEASE_TAG=$(printf '%s\n' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+    PACK_ASSET=$(printf '%s\n' "$json" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\.update\.tar\.gz\)".*/\1/p' | head -n 1)
+    [ -n "$RELEASE_TAG" ] || die "no release found for $REPO"
+    [ -n "$PACK_ASSET" ] || die "release $RELEASE_TAG ships no update pack; it needs a full reflash"
+}
+
+download_pack() {
+    mkdir -p "$CACHE"
+    dest="$CACHE/$PACK_ASSET"
+    url="https://github.com/$REPO/releases/download/$RELEASE_TAG/$PACK_ASSET"
+    if [ ! -f "$dest" ]; then
+        log "downloading $PACK_ASSET"
+        curl -fL -o "$dest.part" "$url" || { rm -f "$dest.part"; die "download failed: $url"; }
+        mv -f "$dest.part" "$dest"
+    else
+        log "using cached $PACK_ASSET"
+    fi
+    curl -fsSL -o "$dest.sha256" "$url.sha256" || die "could not download $PACK_ASSET.sha256"
+    sha_expected=$(awk 'NF { print $1; exit }' "$dest.sha256")
+    sha_actual=$(sha256sum "$dest" | awk '{ print $1 }')
+    if [ "$sha_expected" != "$sha_actual" ]; then
+        rm -f "$dest"
+        die "sha256 mismatch for $PACK_ASSET; removed the bad download, run the update again"
+    fi
+    log "verified sha256: $sha_actual"
+    PACK=$dest
+}
+
+check_space() {
+    pack_kb=$(du -k "$PACK" | awk '{ print $1 }')
+    need_kb=$((pack_kb * 3))
+    free_kb=$(df -k "$ROOT/" | awk 'NR == 2 { print $4 }')
+    [ "$free_kb" -ge "$need_kb" ] || die "not enough free space: need ${need_kb}KB, have ${free_kb}KB"
+}
+
+apply_pack() {
+    require_root
+    log "backing up current kernel and boot files"
+    for f in $KERNEL_BACKUP_FILES; do
+        if [ -f "$ROOT/$f" ]; then
+            cp -p "$ROOT/$f" "$ROOT/$f.prev"
+        fi
+    done
+    onboot_saved=
+    if [ -f "$ROOT/tce/onboot.lst" ]; then
+        onboot_saved="$ROOT/tce/onboot.lst.before-update"
+        cp "$ROOT/tce/onboot.lst" "$onboot_saved"
+    fi
+    log "applying update pack"
+    tar -xzf "$PACK" -C "${ROOT:-/}"
+    if [ -n "$onboot_saved" ] && [ -f "$ROOT/tce/onboot.lst" ]; then
+        # Keep extensions the user added to the boot list.
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            grep -qxF "$line" "$ROOT/tce/onboot.lst" || printf '%s\n' "$line" >>"$ROOT/tce/onboot.lst"
+        done <"$onboot_saved"
+    fi
+    mkdir -p "$SHARE"
+    printf '%s\n' "${RELEASE_TAG:-local-file}" >"$MARKER"
+    sync
+}
+
+main() {
+    if [ "$ROLLBACK" = 1 ]; then
+        do_rollback
+        exit 0
+    fi
+
+    current=$(cat "$MARKER" 2>/dev/null || echo none)
+
+    if [ -n "$PACK_FILE" ]; then
+        [ -f "$PACK_FILE" ] || die "no such file: $PACK_FILE"
+        PACK=$PACK_FILE
+        log "applying local pack $PACK_FILE (no sha256 check)"
+    else
+        resolve_release
+        log "installed: $current"
+        log "available: $RELEASE_TAG"
+        if [ "$current" = "$RELEASE_TAG" ]; then
+            log "already up to date"
+            exit 0
+        fi
+        if [ "$CHECK" = 1 ]; then
+            log "update available; run: sudo x-chip-update"
+            exit 0
+        fi
+        require_root
+        download_pack
+    fi
+
+    check_space
+    if [ "$YES" != 1 ]; then
+        printf 'Apply update %s now? Type y to continue: ' "${RELEASE_TAG:-$PACK}"
+        read -r answer
+        case "$answer" in
+            y|Y|yes|YES) ;;
+            *) log "aborted; nothing changed"; exit 0 ;;
+        esac
+    fi
+    apply_pack
+    log "update applied; /home, WiFi, and SSH keys were not touched"
+    log "reboot to finish: sudo reboot"
+}
+
+main "$@"
+XCHIP_UPDATE_EOF
+}
+
 install_boot_runtime_script() {
     local tmp
     tmp=$(mktemp)
@@ -6496,6 +6720,7 @@ install_ca_certificates_bundle
 prune_conflicting_xorg_defaults_from_rootfs
 install_preseeded_firmware_fallback
 install_boot_runtime_script
+install_update_tooling
 compile_host_mime_database
 
 # 4. pack (numeric owners; the flasher rebuilds the UBIFS from this tree).

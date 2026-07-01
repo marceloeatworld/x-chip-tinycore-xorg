@@ -58,6 +58,10 @@ Desktop status:
 - `Xorg.tcz`, `xf86-video-fbdev.tcz`, `flwm.tcz`, `jwm.tcz`, `aterm.tcz`,
   `xrandr.tcz`, `xinput.tcz`, and app dependencies like `libffi6.tcz` are
   preseeded into `/tce/optional`
+- both PocketCHIP keyboard revisions (v72 and v73) are detected at boot from
+  the DIP EEPROM product version, so Shift/Esc land on the right keys on
+  either hardware; VGA, HDMI, and Source Parts Popcorn HDMI DIPs are also
+  auto-detected
 - Xorg/JWM starts automatically from the boot runtime via `x-chip-desktop-start`
 - tty1, serial console, USB debug networking, and SSH remain available as
   recovery paths
@@ -145,6 +149,31 @@ SSH, use the lower-level script with a rootfs file you already downloaded:
 ```sh
 ./scripts/05-flash-via-host.sh --host my-linux-host --rootfs /path/to/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc.rootfs.tar.gz --flash
 ```
+
+## Updating Without Reflashing
+
+Flashing is only needed once. After that, new releases install over WiFi
+directly on the PocketCHIP, keeping your files, WiFi setup, and SSH keys:
+
+```sh
+sudo x-chip-update
+```
+
+There is also a `System Update` entry in the JWM `Pocket` menu. The command
+checks GitHub for the latest release, downloads its small update pack, checks
+the SHA256, then updates the kernel, system scripts, and the bundled apps.
+`/home` is never touched. Reboot when it finishes.
+
+Useful variants:
+
+```sh
+sudo x-chip-update --check      # only report whether an update exists
+sudo x-chip-update --rollback   # boot the previous kernel if an update misbehaves
+```
+
+TinyCore packages themselves update separately with `tce-update` (see
+Installing Software After Flash). A full reflash is only needed again for
+bootloader or partition-layout changes; release notes will say so.
 
 ## Personal Build
 

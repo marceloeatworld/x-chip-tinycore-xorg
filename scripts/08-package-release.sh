@@ -72,6 +72,10 @@ rootfs_out="$release_dir/$RELEASE_NAME.rootfs.tar.gz"
 cp "$ROOTFS" "$rootfs_out"
 (cd "$release_dir" && sha256sum "$(basename "$rootfs_out")" >"$(basename "$rootfs_out").sha256")
 
+RELEASE_NAME="$RELEASE_NAME" DIST_DIR="$DIST_DIR" ./scripts/10-build-update-pack.sh "$rootfs_out"
+pack_out="$release_dir/$RELEASE_NAME.update.tar.gz"
+pack_sha=$(sha256sum "$pack_out" | awk '{print $1}')
+
 git_rev=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 generated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 rootfs_sha=$(sha256sum "$rootfs_out" | awk '{print $1}')
@@ -88,6 +92,8 @@ tinycore_version=$TINYCORE_VERSION
 tcz_repo=$TCZ_REPO
 rootfs_file=$(basename "$rootfs_out")
 rootfs_sha256=$rootfs_sha
+update_pack_file=$(basename "$pack_out")
+update_pack_sha256=$pack_sha
 contains_wifi_config=$has_wifi
 authorized_keys_bytes=$auth_bytes
 public_image=$([ "${ALLOW_PERSONAL_RELEASE:-0}" = 1 ] && echo 0 || echo 1)
@@ -131,6 +137,9 @@ Flash through another Linux host:
   ./scripts/05-flash-via-host.sh --host <host> --rootfs $(basename "$rootfs_out") --flash
 
 After flashing, remove the FEL jumper and reboot.
+
+Update an already-flashed device without reflashing (keeps /home and WiFi):
+  On the PocketCHIP, run: sudo x-chip-update
 
 $access_notes
 EOF

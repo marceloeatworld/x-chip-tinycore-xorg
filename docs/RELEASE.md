@@ -54,7 +54,9 @@ make public-release
 
 `public-release` rebuilds the public rootfs first (so the packaged tarball
 always matches the git revision stamped in `MANIFEST.txt`), runs the public
-verifier, then writes the release files to `dist/`. `make public-rootfs` and
+verifier, then writes the release files to `dist/`, including the
+`*.update.tar.gz` pack that flashed devices install with `sudo x-chip-update`
+instead of reflashing. `make public-rootfs` and
 `make public-verify` remain available as standalone steps while iterating.
 
 The public build path sets `PUBLIC_IMAGE=1`. That forces empty

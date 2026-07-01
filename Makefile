@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 PRIVATE_ROMS_DIR ?= dist/private-roms/GameBoy
 
-.PHONY: all deps base kernel rtl8812au rootfs container-build private-gameboy-rootfs public-rootfs verify public-verify public-release community-tcz flash-local-check flash-local flash-host-check flash-host flash-pi-check flash-pi clean distclean
+.PHONY: all deps base kernel rtl8812au rootfs container-build private-gameboy-rootfs public-rootfs verify public-verify public-release community-tcz update-pack flash-local-check flash-local flash-host-check flash-host flash-pi-check flash-pi clean distclean
 
 all: rootfs
 
@@ -57,6 +57,9 @@ public-release: public-rootfs
 
 community-tcz:
 	./scripts/09-build-community-tcz.sh
+
+update-pack:
+	./scripts/10-build-update-pack.sh
 
 flash-local-check: verify
 	./scripts/05-flash-local.sh

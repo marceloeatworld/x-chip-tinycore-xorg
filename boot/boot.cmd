@@ -9,16 +9,22 @@ ubifsload 0x42000000 /boot/zImage
 ubifsload 0x43000000 /boot/sun5i-r8-chip.dtb
 
 # --- DIP device-tree overlay auto-select ------------------------------------
-# PocketCHIP is DIP PID 1. This is copied from the known-good x-chip-os boot
-# flow, with paths adjusted to this TinyCore rootfs.
+# Copied from the known-good x-chip-os boot flow, with paths adjusted to this
+# TinyCore rootfs. EEPROM header (big-endian): magic 'CHIP'(4) ver(1) VID(4)
+# PID(2) product-version(1). NTC VID ends in 0x1a at byte 8; PocketCHIP is
+# PID 1, and its product-version byte at offset 11 picks the keyboard matrix
+# (48 = v72, 49 = v73). Source Parts (VID ...0x1b) product 10 is the
+# Popcorn/Stove HDMI DIP.
 setenv dipdir /lib/firmware/nextthingco/chip/early
 if test -z "${dipovl}" && w1 read 0 0 0 0x80 0x45000000; then
 	if itest.l *0x45000000 == 0x50494843; then
-		echo "DIP id header (magic/ver/VID@5/PID@9):"
+		echo "DIP id header (magic/ver/VID@5/PID@9/pver@11):"
 		md.b 0x45000000 0x10
 		if itest.b *0x45000009 == 0x00 && itest.b *0x4500000a == 0x01; then setenv dipovl ${dipdir}/x-chip-pocketchip.dtbo; fi
+		if itest.b *0x45000009 == 0x00 && itest.b *0x4500000a == 0x01 && itest.b *0x4500000b == 0x30; then setenv dipovl ${dipdir}/x-chip-pocketchip-v72.dtbo; fi
 		if itest.b *0x45000009 == 0x00 && itest.b *0x4500000a == 0x02; then setenv dipovl ${dipdir}/x-chip-dip-vga.dtbo;    fi
 		if itest.b *0x45000009 == 0x00 && itest.b *0x4500000a == 0x03; then setenv dipovl ${dipdir}/x-chip-dip-hdmi.dtbo;   fi
+		if itest.b *0x45000008 == 0x1b && itest.b *0x45000009 == 0x00 && itest.b *0x4500000a == 0x0a; then setenv dipovl ${dipdir}/x-chip-dip-hdmi-popcorn.dtbo; fi
 		if test -n "${dipovl}"; then echo "DIP: selected ${dipovl}"; else echo "DIP: no overlay for this PID"; fi
 	else
 		echo "DIP: no CHIP header (no/foreign DIP)"

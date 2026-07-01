@@ -455,6 +455,8 @@ for required in \
     usr/share/kmap/pocketchip.kmap \
     usr/share/kmap/pocketchip.loadkeys \
     lib/firmware/nextthingco/chip/early/x-chip-pocketchip.dtbo \
+    lib/firmware/nextthingco/chip/early/x-chip-pocketchip-v72.dtbo \
+    lib/firmware/nextthingco/chip/early/x-chip-dip-hdmi-popcorn.dtbo \
     lib/firmware/rtlwifi/rtl8723bs_nic.bin \
     tce/onboot.lst \
     tce/media.lst \
@@ -734,12 +736,20 @@ fi
 require_content boot/boot.scr 'video=Unknown-1:480x272e'
 require_content boot/boot.scr 'video=Composite-1:d'
 require_content boot/boot.scr 'x-chip-pocketchip.dtbo'
+require_content boot/boot.scr 'x-chip-pocketchip-v72.dtbo'
+require_content boot/boot.scr 'x-chip-dip-hdmi-popcorn.dtbo'
 require_binary_hex lib/firmware/nextthingco/chip/early/x-chip-pocketchip.dtbo \
     '000000060000000100000008' \
     'PocketCHIP TCA8418 keyboard IRQ must be PIO G1 LEVEL_LOW'
 reject_binary_hex lib/firmware/nextthingco/chip/early/x-chip-pocketchip.dtbo \
     '000000060000000100000002' \
     'PocketCHIP TCA8418 keyboard IRQ must not be PIO G1 EDGE_FALLING'
+require_binary_hex lib/firmware/nextthingco/chip/early/x-chip-pocketchip-v72.dtbo \
+    '000000060000000100000008' \
+    'PocketCHIP v72 TCA8418 keyboard IRQ must be PIO G1 LEVEL_LOW'
+reject_binary_hex lib/firmware/nextthingco/chip/early/x-chip-pocketchip-v72.dtbo \
+    '000000060000000100000002' \
+    'PocketCHIP v72 TCA8418 keyboard IRQ must not be PIO G1 EDGE_FALLING'
 require_content etc/os-release 'PRETTY_NAME="PocketCHIP TinyCore'
 require_content etc/os-release 'VERSION_ID=16'
 require_content etc/os-release "$PROJECT_REPO_URL"
@@ -785,6 +795,19 @@ require_content opt/x-chip-boot.sh 'silence_kernel_console'
 require_content opt/x-chip-boot.sh 'boot_status'
 require_content opt/x-chip-boot.sh 'X-CHIP TinyCore'
 require_content opt/x-chip-boot.sh 'Starting desktop on VT2'
+
+# The WiFi menu runs as the desktop user; it must escalate for iface up,
+# scans, and the supplicant or it reports "No networks found".
+require_content usr/local/bin/x-chip-wifi-menu 'as_root'
+require_content usr/local/bin/x-chip-wifi-menu 'as_root ip link set'
+require_content usr/local/bin/x-chip-wifi-menu 'as_root iw dev'
+
+# In-place update tooling must ship in every image.
+require_mode_pattern usr/local/sbin/x-chip-update '-rwxr-xr-x'
+require_content usr/local/sbin/x-chip-update 'applied-release'
+require_content usr/local/sbin/x-chip-update '.update.tar.gz'
+require_nonempty usr/local/share/x-chip/update-repo
+require_nonempty usr/local/share/x-chip/release-info
 require_content opt/x-chip-boot.sh 'Boot runtime complete'
 require_content opt/x-chip-boot.sh 'touch "$RUN_MARKER"'
 require_content opt/x-chip-boot.sh 'touch "$CONSOLE_READY"'
@@ -1056,7 +1079,7 @@ require_content usr/local/bin/x-chip-wifi-menu 'SCAN_DRIVER=rtl8812au'
 require_content usr/local/bin/x-chip-wifi-menu 'find_client_wifi_iface'
 require_content usr/local/bin/x-chip-wifi-menu 'find_scan_wifi_iface'
 require_content usr/local/bin/x-chip-wifi-menu 'scan-external'
-require_content usr/local/bin/x-chip-wifi-menu 'sudo iw dev "$iface" scan'
+require_content usr/local/bin/x-chip-wifi-menu 'as_root iw dev "$iface" scan'
 require_content usr/local/bin/x-chip-wifi-menu 'tmp=/tmp/x-chip-iw-scan.$$'
 require_content usr/local/bin/x-chip-wifi-menu 'No external scan WiFi interface found" >&2'
 require_content usr/local/bin/x-chip-wifi-menu 'No WiFi interface found" >&2'
