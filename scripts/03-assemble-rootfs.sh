@@ -4920,8 +4920,10 @@ EOF
   <IconPath>/usr/local/share/x-chip/xorg/icons</IconPath>
   <DefaultIcon>pocket.xpm</DefaultIcon>
   <StartupCommand>x-chip-x-apply-calibration</StartupCommand>
+  <StartupCommand>x-chip-x-keymap</StartupCommand>
   <StartupCommand>x-chip-desktop-stats restore</StartupCommand>
   <RestartCommand>x-chip-x-apply-calibration</RestartCommand>
+  <RestartCommand>x-chip-x-keymap</RestartCommand>
 
   <RootMenu onroot="3">
     <Menu label="Apps" icon="apps.xpm">
