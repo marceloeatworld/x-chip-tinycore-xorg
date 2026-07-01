@@ -71,7 +71,7 @@ the PocketCHIP NAND rootfs.
 
 For this tutorial release, the helper script downloads from:
 
-<https://github.com/marceloeatworld/x-chip-tinycore-xorg/releases/tag/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc-2026-07-01>
+<https://github.com/marceloeatworld/x-chip-tinycore-xorg/releases/tag/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc-2026-07-01-brave-certs>
 
 On Ubuntu/Debian, copy and paste:
 
