@@ -158,6 +158,31 @@ require_content() {
     }
 }
 
+require_binary_hex() {
+    local path=$1 pattern=$2 note=$3 hex
+    require_entry "$path"
+    hex=$(extract_entry "$path" | od -An -tx1 | tr -d ' \n')
+    case "$hex" in
+        *"$pattern"*) ;;
+        *)
+            echo "ERROR: /${path#/} missing expected binary marker: $note" >&2
+            exit 1
+            ;;
+    esac
+}
+
+reject_binary_hex() {
+    local path=$1 pattern=$2 note=$3 hex
+    require_entry "$path"
+    hex=$(extract_entry "$path" | od -An -tx1 | tr -d ' \n')
+    case "$hex" in
+        *"$pattern"*)
+            echo "ERROR: /${path#/} contains forbidden binary marker: $note" >&2
+            exit 1
+            ;;
+    esac
+}
+
 require_xpm_icon() {
     local path=$1 header
     require_entry "$path"
@@ -694,6 +719,12 @@ fi
 require_content boot/boot.scr 'video=Unknown-1:480x272e'
 require_content boot/boot.scr 'video=Composite-1:d'
 require_content boot/boot.scr 'x-chip-pocketchip.dtbo'
+require_binary_hex lib/firmware/nextthingco/chip/early/x-chip-pocketchip.dtbo \
+    '000000060000000100000008' \
+    'PocketCHIP TCA8418 keyboard IRQ must be PIO G1 LEVEL_LOW'
+reject_binary_hex lib/firmware/nextthingco/chip/early/x-chip-pocketchip.dtbo \
+    '000000060000000100000002' \
+    'PocketCHIP TCA8418 keyboard IRQ must not be PIO G1 EDGE_FALLING'
 require_content etc/os-release 'PRETTY_NAME="PocketCHIP TinyCore'
 require_content etc/os-release 'VERSION_ID=16'
 require_content etc/os-release "$PROJECT_REPO_URL"

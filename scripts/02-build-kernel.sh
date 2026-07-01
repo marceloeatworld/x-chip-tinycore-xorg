@@ -153,6 +153,17 @@ compile_overlay() {
         -I arch/arm/boot/dts/allwinner \
         -I "$OVERLAY_DIR" \
         "$src" >"$tmp"
+    if [ "$out" = x-chip-pocketchip.dtbo ]; then
+        if grep -q 'interrupts = <6 1 8>;' "$tmp"; then
+            :
+        elif grep -q 'interrupts = <6 1 2>;' "$tmp"; then
+            sed -i 's/interrupts = <6 1 2>;/interrupts = <6 1 8>;/' "$tmp"
+        else
+            echo "ERROR: PocketCHIP keyboard IRQ shape changed in $src" >&2
+            echo "Expected PIO G1 as EDGE_FALLING or LEVEL_LOW before compiling overlay." >&2
+            exit 1
+        fi
+    fi
     ./scripts/dtc/dtc -@ -I dts -O dtb -o "$dtbo" "$tmp"
     need_root install -m644 "$dtbo" "$RFS/lib/firmware/nextthingco/chip/early/$out"
     rm -f "$tmp" "$dtbo"
