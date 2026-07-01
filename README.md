@@ -69,9 +69,10 @@ Desktop status:
 Use a Linux PC. Ubuntu or Debian is the easiest path for beginners. This erases
 the PocketCHIP NAND rootfs.
 
-For this tutorial release, the helper script downloads from:
+The helper script finds and downloads the latest public release by itself, so
+these commands stay the same for every future release:
 
-<https://github.com/marceloeatworld/x-chip-tinycore-xorg/releases/tag/x-chip-tinycore-xorg-pocketchip-6.18.37-chip-tc-2026-07-01-brave-certs>
+<https://github.com/marceloeatworld/x-chip-tinycore-xorg/releases/latest>
 
 On Ubuntu/Debian, copy and paste:
 
@@ -95,10 +96,12 @@ nix shell nixpkgs#ubootTools nixpkgs#sunxi-tools -c ./scripts/flash-release-pock
 ```
 
 The script downloads the release rootfs and `.sha256`, verifies the image,
-installs or checks the flashing commands, refreshes the flash helper SHA values
-from GitHub, downloads `x-chip-tools` and installer files on first run, then
-asks you to type `FLASH` before erasing NAND. Users do not need to look up SHA
-values manually.
+installs or checks the flashing commands, verifies the flash helper downloads
+against the SHA256 values pinned in `config.env`, downloads `x-chip-tools` and
+installer files on first run, then asks you to type `FLASH` before erasing
+NAND. Users do not need to look up SHA values manually. If upstream re-uploads
+a helper asset and the pinned check fails, `--refresh-flash-shas` trusts the
+GitHub API values instead.
 
 On other Linux distros, run `./scripts/flash-release-pocketchip.sh`. If automatic
 package install is unavailable, it prints the missing command names.

@@ -40,6 +40,18 @@ TIC80_TAG=${TIC80_TAG:-v1.1.2837}
 MGBA_TAG=${MGBA_TAG:-0.10.5}
 CHOCOLATE_DOOM_TAG=${CHOCOLATE_DOOM_TAG:-chocolate-doom-3.1.1}
 FREEDOOM_VERSION=${FREEDOOM_VERSION:-0.13.0}
+
+# Upstream archives and tags are mutable; pin what actually ships. Update the
+# pin together with the version when bumping.
+SUNVOX_SHA256=${SUNVOX_SHA256:-acd94ae4acd6ab60bee1f5ba117082cd2ea51f7e87871f1776d11cfd24a59880}
+VIRTUAL_ANS_SHA256=${VIRTUAL_ANS_SHA256:-e263aaba6d316723d9a6627423389f725b6305cb2c6272ac79cfb4e0a32e3eb3}
+PIXITRACKER_SHA256=${PIXITRACKER_SHA256:-1ef52342cf4572352c0becf2a493ba909ba140fe2b06bfa4b5f350247b8ddf91}
+PIXITRACKER_1BIT_SHA256=${PIXITRACKER_1BIT_SHA256:-5810cdbfa36d67f6c82249eed0fc2b834e747edd06f4bea901391ca747df2e69}
+PIXILANG_SHA256=${PIXILANG_SHA256:-9ae85db1226396a46ae5110ef360db7873c3054a29e70002d6272dea84c3a64d}
+FREEDOOM_SHA256=${FREEDOOM_SHA256:-3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59}
+TIC80_COMMIT=${TIC80_COMMIT:-be42d6f146cfa520b9b1050feba10cc8c14fb3bd}
+MGBA_COMMIT=${MGBA_COMMIT:-26b7884bc25a5933960f3cdcd98bac1ae14d42e2}
+CHOCOLATE_DOOM_COMMIT=${CHOCOLATE_DOOM_COMMIT:-410d96855b5df5410ff591a90efeafa889119224}
 JOBS=${JOBS:-$(nproc)}
 
 apps=("$@")
@@ -65,17 +77,41 @@ apt_install() {
     apt-get install -y --no-install-recommends "$@"
 }
 
+verify_sha256() {
+    local file=$1 expected=$2 actual
+    [ -n "$expected" ] || return 0
+    actual=$(sha256sum "$file" | awk '{ print $1 }')
+    [ "$actual" = "$expected" ] || {
+        echo "ERROR: sha256 mismatch for $file" >&2
+        echo "expected: $expected" >&2
+        echo "actual:   $actual" >&2
+        exit 1
+    }
+}
+
 download_file() {
-    local url=$1 dest=$2 tmp
+    local url=$1 dest=$2 expected_sha=${3:-} tmp
     tmp="$dest.part.$$"
     rm -f "$tmp"
     if wget -q -O "$tmp" "$url"; then
         [ -s "$tmp" ] || { echo "ERROR: empty download: $url" >&2; rm -f "$tmp"; exit 1; }
+        verify_sha256 "$tmp" "$expected_sha"
         mv -f "$tmp" "$dest"
     else
         rm -f "$tmp"
         exit 1
     fi
+}
+
+require_pinned_commit() {
+    local repo_dir=$1 expected=$2 label=$3 actual
+    actual=$(git -C "$repo_dir" rev-parse HEAD)
+    [ "$actual" = "$expected" ] || {
+        echo "ERROR: $label tag no longer points at the pinned commit" >&2
+        echo "expected: $expected" >&2
+        echo "actual:   $actual" >&2
+        exit 1
+    }
 }
 
 install_common_tools() {
@@ -190,7 +226,7 @@ build_sunvox() {
     rm -rf "$work"
     mkdir -p "$work"
 
-    download_file "$SUNVOX_URL" "$archive"
+    download_file "$SUNVOX_URL" "$archive" "$SUNVOX_SHA256"
     unzip -q "$archive" -d "$work/src"
 
     [ -x "$src/sunvox/linux_arm/sunvox" ] || {
@@ -337,7 +373,7 @@ EOF
 }
 
 build_warmplace_boot_pixicode_app() {
-    local name=$1 version=$2 url=$3 root_dir=$4 command=$5 window_name=$6 site=$7 description=$8 license=$9 info=${10} extra_config=${11:-}
+    local name=$1 version=$2 url=$3 sha256=$4 root_dir=$5 command=$6 window_name=$7 site=$8 description=$9 license=${10} info=${11} extra_config=${12:-}
     echo ">> packaging $name.tcz from official WarmPlace $version Linux ARM release"
     install_common_tools
     apt_install unzip wget
@@ -351,7 +387,7 @@ build_warmplace_boot_pixicode_app() {
     rm -rf "$work"
     mkdir -p "$work"
 
-    download_file "$url" "$archive"
+    download_file "$url" "$archive" "$sha256"
     unzip -q "$archive" -d "$work/src"
 
     [ -x "$src/bin/pixilang_linux_arm_armhf" ] || {
@@ -399,6 +435,7 @@ build_virtual_ans() {
         virtual-ans \
         "$VIRTUAL_ANS_VERSION" \
         "$VIRTUAL_ANS_URL" \
+        "$VIRTUAL_ANS_SHA256" \
         virtual_ans3 \
         virtual-ans \
         "Virtual ANS" \
@@ -414,6 +451,7 @@ build_pixitracker() {
         pixitracker \
         "$PIXITRACKER_VERSION" \
         "$PIXITRACKER_URL" \
+        "$PIXITRACKER_SHA256" \
         pixitracker \
         pixitracker \
         "PixiTracker" \
@@ -428,6 +466,7 @@ build_pixitracker_1bit() {
         pixitracker-1bit \
         "$PIXITRACKER_VERSION" \
         "$PIXITRACKER_1BIT_URL" \
+        "$PIXITRACKER_1BIT_SHA256" \
         pixitracker_1bit \
         pixitracker-1bit \
         "PixiTracker 1BIT" \
@@ -451,7 +490,7 @@ build_pixilang() {
     rm -rf "$work"
     mkdir -p "$work"
 
-    download_file "$PIXILANG_URL" "$archive"
+    download_file "$PIXILANG_URL" "$archive" "$PIXILANG_SHA256"
     unzip -q "$archive" -d "$work/src"
 
     [ -x "$src/bin/linux_arm/pixilang_no_opengl" ] || {
@@ -547,6 +586,7 @@ build_tic80() {
     rm -rf "$work"
     mkdir -p "$work"
     git clone --recursive --branch "$TIC80_TAG" --depth 1 https://github.com/nesbox/TIC-80.git "$src"
+    require_pinned_commit "$src" "$TIC80_COMMIT" "TIC-80 $TIC80_TAG"
 
     # PocketCHIP has hardware arrow keys and numbered keys beside the screen.
     # Make game prompts intuitive: 1 is TIC-80 A, 2 is TIC-80 B.
@@ -666,6 +706,7 @@ build_mgba() {
     rm -rf "$work"
     mkdir -p "$work"
     git clone --recursive --branch "$MGBA_TAG" --depth 1 https://github.com/mgba-emu/mgba.git "$src"
+    require_pinned_commit "$src" "$MGBA_COMMIT" "mGBA $MGBA_TAG"
 
     # Xfbdev on PocketCHIP can expose a hardware/double-buffered SDL 1.2
     # surface that opens but never visibly updates. Force a software surface.
@@ -948,6 +989,7 @@ build_doom() {
     mkdir -p "$work"
     git clone --depth 1 --branch "$CHOCOLATE_DOOM_TAG" \
         https://github.com/chocolate-doom/chocolate-doom.git "$src"
+    require_pinned_commit "$src" "$CHOCOLATE_DOOM_COMMIT" "Chocolate Doom $CHOCOLATE_DOOM_TAG"
 
     (
         cd "$src"
@@ -959,7 +1001,7 @@ build_doom() {
         make -j"$JOBS"
     )
 
-    download_file "https://github.com/freedoom/freedoom/releases/download/v$FREEDOOM_VERSION/freedoom-$FREEDOOM_VERSION.zip" "$freedoom_zip"
+    download_file "https://github.com/freedoom/freedoom/releases/download/v$FREEDOOM_VERSION/freedoom-$FREEDOOM_VERSION.zip" "$freedoom_zip" "$FREEDOOM_SHA256"
     mkdir -p "$freedoom_dir"
     unzip -q "$freedoom_zip" -d "$freedoom_dir"
 

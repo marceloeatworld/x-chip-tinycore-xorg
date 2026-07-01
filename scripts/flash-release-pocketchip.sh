@@ -9,12 +9,16 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 cd "$HERE"
 source ./config.env
 
+# Offline/rate-limit fallback only: the script asks GitHub for the latest
+# release at run time, so users always get the newest image without updates.
 DEFAULT_RELEASE_TAG="${PROJECT_REPO_NAME}-pocketchip-${KERNEL_VERSION}${KERNEL_LOCALVERSION}-2026-07-01-brave-certs"
-RELEASE_TAG=${RELEASE_TAG:-$DEFAULT_RELEASE_TAG}
+RELEASE_TAG=${RELEASE_TAG:-}
 RELEASE_REPO=${RELEASE_REPO:-${PROJECT_GITHUB_OWNER}/${PROJECT_REPO_NAME}}
 RELEASE_NAME=${RELEASE_NAME:-${PROJECT_REPO_NAME}-pocketchip-${KERNEL_VERSION}${KERNEL_LOCALVERSION}}
-RELEASE_ASSET=${RELEASE_ASSET:-${RELEASE_NAME}.rootfs.tar.gz}
-RELEASE_SHA_ASSET=${RELEASE_SHA_ASSET:-${RELEASE_ASSET}.sha256}
+# Release assets are named after the tag; releases before 2026-07-01 used the
+# un-dated RELEASE_NAME. download_release tries both unless RELEASE_ASSET is set.
+RELEASE_ASSET=${RELEASE_ASSET:-}
+RELEASE_SHA_ASSET=${RELEASE_SHA_ASSET:-}
 CACHE_ROOT=${XDG_CACHE_HOME:-$HOME/.cache}
 DOWNLOAD_DIR=${DOWNLOAD_DIR:-}
 
@@ -26,13 +30,17 @@ DOWNLOAD_ONLY=0
 ASSUME_YES=0
 PREFLIGHT=0
 INSTALL_DEPS=${INSTALL_DEPS:-ask}
-REFRESH_FLASH_SHAS=${REFRESH_FLASH_SHAS:-1}
+# 0 keeps the SHA256 values pinned in config.env for the U-Boot/SPL/installer
+# assets written to NAND; refreshing from the GitHub API would make the check
+# trust the same server that serves the binaries.
+REFRESH_FLASH_SHAS=${REFRESH_FLASH_SHAS:-0}
 
 usage() {
     cat <<EOF
 usage: $0 [options]
 
-Downloads and flashes the current public PocketCHIP TinyCore Xorg release.
+Downloads and flashes the latest public PocketCHIP TinyCore Xorg release,
+resolved automatically from GitHub at run time.
 By default this will erase and rewrite the PocketCHIP NAND after confirmation.
 
 Options:
@@ -41,10 +49,10 @@ Options:
   --download-only       download and verify the release only
   --install-deps        install missing Debian/Ubuntu host packages with apt
   --no-install-deps     only report missing host commands
-  --no-refresh-flash-shas
-                        use pinned flash helper SHA256 values from config.env
+  --refresh-flash-shas  fetch flash helper SHA256 values from the GitHub API
+                        (default: use the values pinned in config.env)
   --yes                 skip the final interactive confirmation
-  --tag TAG             GitHub release tag to download
+  --tag TAG             flash a specific release tag (default: latest release)
   --repo OWNER/REPO     GitHub repository (default: $RELEASE_REPO)
   --download-dir DIR    cache/download directory
   --rootfs FILE         use an existing rootfs tar.gz instead of downloading
@@ -75,6 +83,9 @@ while [ "$#" -gt 0 ]; do
             ;;
         --no-install-deps)
             INSTALL_DEPS=no
+            ;;
+        --refresh-flash-shas)
+            REFRESH_FLASH_SHAS=1
             ;;
         --no-refresh-flash-shas)
             REFRESH_FLASH_SHAS=0
@@ -119,6 +130,34 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
+# Resolve which release to flash. Empty RELEASE_TAG means "the latest public
+# release": ask the GitHub API for its tag and real asset name so nobody has to
+# keep tag or file naming in sync by hand. Offline or rate-limited, fall back
+# to the pinned tag above.
+resolve_release_tag() {
+    local json tag asset
+    [ -z "$RELEASE_TAG" ] || return 0
+    json=$(curl -fsSL "https://api.github.com/repos/$RELEASE_REPO/releases/latest" 2>/dev/null) || json=
+    tag=$(printf '%s\n' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+    if [ -z "$tag" ]; then
+        echo ">> could not query the latest release; using pinned tag $DEFAULT_RELEASE_TAG" >&2
+        RELEASE_TAG=$DEFAULT_RELEASE_TAG
+        return 0
+    fi
+    RELEASE_TAG=$tag
+    echo ">> latest release: $RELEASE_TAG"
+    if [ -z "$RELEASE_ASSET" ]; then
+        asset=$(printf '%s\n' "$json" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\.rootfs\.tar\.gz\)".*/\1/p' | head -n 1)
+        [ -n "$asset" ] && RELEASE_ASSET=$asset
+    fi
+}
+
+if [ -z "$ROOTFS_OVERRIDE" ]; then
+    resolve_release_tag
+else
+    RELEASE_TAG=${RELEASE_TAG:-$DEFAULT_RELEASE_TAG}
+fi
+
 DOWNLOAD_DIR=${DOWNLOAD_DIR:-$CACHE_ROOT/x-chip-tinycore-xorg/releases/$RELEASE_TAG}
 RELEASE_BASE_URL=${BASE_URL_OVERRIDE:-https://github.com/$RELEASE_REPO/releases/download/$RELEASE_TAG}
 
@@ -126,8 +165,9 @@ if [ -n "$ROOTFS_OVERRIDE" ]; then
     ROOTFS=$ROOTFS_OVERRIDE
     SHA256_FILE=${SHA256_OVERRIDE:-${ROOTFS}.sha256}
 else
-    ROOTFS=$DOWNLOAD_DIR/$RELEASE_ASSET
-    SHA256_FILE=$DOWNLOAD_DIR/$RELEASE_SHA_ASSET
+    # Resolved by download_release once the release asset name is known.
+    ROOTFS=
+    SHA256_FILE=
 fi
 
 need_cmd() {
@@ -284,12 +324,12 @@ download_asset() {
     tmp=$dest.part.$$
     rm -f "$tmp"
     echo ">> downloading $name"
-    if curl -fL --retry 3 --connect-timeout 20 --remove-on-error -o "$tmp" "$url"; then
+    if curl -fL --retry 3 --connect-timeout 20 -o "$tmp" "$url"; then
         [ -s "$tmp" ] || { echo "empty download: $url" >&2; rm -f "$tmp"; exit 1; }
         mv -f "$tmp" "$dest"
     else
         rm -f "$tmp"
-        exit 1
+        return 1
     fi
 }
 
@@ -313,13 +353,38 @@ verify_rootfs() {
 }
 
 download_release() {
+    local candidates=() name found=
     if [ -n "$ROOTFS_OVERRIDE" ]; then
         echo ">> using local rootfs: $ROOTFS"
         return 0
     fi
     echo ">> release: $RELEASE_REPO $RELEASE_TAG"
-    download_asset "$RELEASE_ASSET" "$ROOTFS"
-    download_asset "$RELEASE_SHA_ASSET" "$SHA256_FILE"
+    if [ -n "$RELEASE_ASSET" ]; then
+        candidates=("$RELEASE_ASSET")
+    else
+        candidates=("${RELEASE_TAG}.rootfs.tar.gz")
+        [ "$RELEASE_NAME" = "$RELEASE_TAG" ] || candidates+=("${RELEASE_NAME}.rootfs.tar.gz")
+    fi
+    for name in "${candidates[@]}"; do
+        if download_asset "$name" "$DOWNLOAD_DIR/$name"; then
+            found=$name
+            break
+        fi
+        echo ">> no release asset named $name" >&2
+    done
+    if [ -z "$found" ]; then
+        echo "could not download any of: ${candidates[*]}" >&2
+        echo "from: $RELEASE_BASE_URL" >&2
+        exit 1
+    fi
+    RELEASE_ASSET=$found
+    RELEASE_SHA_ASSET=${RELEASE_SHA_ASSET:-${RELEASE_ASSET}.sha256}
+    ROOTFS=$DOWNLOAD_DIR/$RELEASE_ASSET
+    SHA256_FILE=$DOWNLOAD_DIR/$RELEASE_SHA_ASSET
+    if ! download_asset "$RELEASE_SHA_ASSET" "$SHA256_FILE"; then
+        echo "could not download $RELEASE_SHA_ASSET from $RELEASE_BASE_URL" >&2
+        exit 1
+    fi
 }
 
 check_flash_commands() {

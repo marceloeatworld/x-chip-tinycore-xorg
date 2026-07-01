@@ -50,7 +50,9 @@ verify:
 public-verify:
 	PUBLIC_IMAGE=1 REQUIRE_WIFI_CONFIG=0 REQUIRE_AUTHORIZED_KEYS=0 SECRETS_ENV=/dev/null ./scripts/07-verify-rootfs.sh
 
-public-release:
+# Rebuild first so the packaged tarball always matches the git rev stamped in
+# MANIFEST.txt; 08 would otherwise happily package a stale xorg-rootfs.tar.gz.
+public-release: public-rootfs
 	PUBLIC_IMAGE=1 REQUIRE_WIFI_CONFIG=0 REQUIRE_AUTHORIZED_KEYS=0 SECRETS_ENV=/dev/null ./scripts/08-package-release.sh
 
 community-tcz:

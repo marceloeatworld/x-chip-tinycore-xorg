@@ -204,7 +204,7 @@ download_file() {
     local url=$1 dest=$2 expected_sha=${3:-} tmp
     tmp="$dest.part.$$"
     rm -f "$tmp"
-    if curl -fL --remove-on-error -o "$tmp" "$url"; then
+    if curl -fL -o "$tmp" "$url"; then
         [ -s "$tmp" ] || { echo "empty download: $url" >&2; rm -f "$tmp"; exit 1; }
         verify_sha256 "$tmp" "$expected_sha"
         mv -f "$tmp" "$dest"

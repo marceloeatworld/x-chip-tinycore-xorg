@@ -65,7 +65,9 @@ if [ "${REQUIRE_AUTHORIZED_KEYS:-1}" = 0 ]; then
 else
     AUTHORIZED_KEYS_HOST=$(pick_authorized_keys || true)
 fi
-FLASH_HOST=$(resolve_existing "${FLASH_SOURCE:-../flash}" || true)
+# Mount only the firmware subtree; the rest of ../flash is a personal rootfs
+# (SSH keys, WiFi config) that no build, public or not, should be able to read.
+FLASH_FIRMWARE_HOST=$(resolve_existing "${FLASH_SOURCE:-../flash}/rootfs_trixie/usr/lib/firmware" || true)
 CHIP_DEBROOT_HOST=$(resolve_existing "${CHIP_DEBROOT_SOURCE:-../chip-debroot}" || true)
 
 [ -n "$KEYMAP_HOST" ] || { echo "missing keymap: run make deps or set KEYMAP_SOURCE" >&2; exit 1; }
@@ -105,14 +107,14 @@ DOCKER_ARGS=(
     -e ROOTFS_FORCE_FAKEROOT=1 \
 )
 
-if [ -n "$FLASH_HOST" ]; then
-    echo ">> using flash data: $FLASH_HOST"
+if [ -n "$FLASH_FIRMWARE_HOST" ]; then
+    echo ">> using extra firmware: $FLASH_FIRMWARE_HOST"
     DOCKER_ARGS+=(
-        -v "$FLASH_HOST:/flash:ro"
-        -e EXTRA_FIRMWARE_SOURCE=/flash/rootfs_trixie/usr/lib/firmware
+        -v "$FLASH_FIRMWARE_HOST:/inputs/firmware:ro"
+        -e EXTRA_FIRMWARE_SOURCE=/inputs/firmware
     )
 else
-    echo ">> flash data not found; using firmware-rtlwifi.tcz fallback"
+    echo ">> extra firmware not found; using firmware-rtlwifi.tcz fallback"
     DOCKER_ARGS+=(-e EXTRA_FIRMWARE_SOURCE=/missing-firmware)
 fi
 

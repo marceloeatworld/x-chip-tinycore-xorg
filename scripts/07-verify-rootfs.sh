@@ -701,6 +701,21 @@ if [ "$SSH_PASSWORD_AUTH" = 1 ]; then
 else
     reject_locked_shadow
 fi
+
+# The piCore base ships a passwordless 'tc' user with NOPASSWD sudo; the
+# assemble step must lock it and revoke the grant in every build.
+tc_shadow_field=$(extract_entry etc/shadow | awk -F: '$1 == "tc" { print $2; found = 1 } END { if (!found) print "absent" }')
+case "$tc_shadow_field" in
+    absent|\!*|\**) ;;
+    *)
+        echo "ERROR: /etc/shadow leaves the base 'tc' account loginable" >&2
+        exit 1
+        ;;
+esac
+if extract_entry etc/sudoers | grep -Eq '^tc[[:space:]]'; then
+    echo "ERROR: /etc/sudoers still grants the base 'tc' account sudo" >&2
+    exit 1
+fi
 if [ "${REQUIRE_WIFI_CONFIG:-1}" = 1 ]; then
     require_nonempty etc/wpa_supplicant.conf
 fi
@@ -730,6 +745,12 @@ require_content etc/os-release 'VERSION_ID=16'
 require_content etc/os-release "$PROJECT_REPO_URL"
 require_content etc/issue 'PocketCHIP TinyCore'
 require_content etc/motd 'PocketCHIP TinyCore'
+# A tmpfs hides /tmp at runtime, so anything packed under it is dead NAND
+# weight the assemble step forgot to clean.
+if grep -E '^(\./)?tmp/.' "$TMP_LIST" >&2; then
+    echo "ERROR: packed rootfs ships files under /tmp" >&2
+    exit 1
+fi
 require_content etc/fstab 'tmpfs           /tmp         tmpfs'
 require_content etc/fstab 'tmpfs           /run         tmpfs'
 require_content etc/fstab 'tmpfs           /var/run     tmpfs'

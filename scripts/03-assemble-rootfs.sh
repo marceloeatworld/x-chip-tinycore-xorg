@@ -9,8 +9,10 @@
 HERE=$(cd "$(dirname "$0")/.." && pwd); cd "$HERE"
 source ./config.env
 if [ "${PUBLIC_IMAGE:-0}" != 1 ] && [ -f "$SECRETS_ENV" ]; then
+    # Keep xtrace off while sourcing so a `bash -x` run cannot echo credentials
+    # into the build log (config.env documents this guarantee).
     # shellcheck disable=SC1090
-    source "$SECRETS_ENV"
+    { set +x; source "$SECRETS_ENV"; } 2>/dev/null
 fi
 
 if [ "${PUBLIC_IMAGE:-0}" = 1 ]; then
@@ -411,6 +413,21 @@ EOF
     need_root touch "$RFS/etc/sudoers"
     need_root grep -Eq "^$SSH_USER[[:space:]]+ALL=\\(ALL\\)[[:space:]]+NOPASSWD:[[:space:]]*ALL" "$RFS/etc/sudoers" 2>/dev/null || \
         echo "$SSH_USER ALL=(ALL) NOPASSWD: ALL" | need_root tee -a "$RFS/etc/sudoers" >/dev/null
+
+    # The piCore base ships a passwordless 'tc' user with NOPASSWD sudo. This
+    # image logs in as $SSH_USER, so lock 'tc' and revoke its sudo grant.
+    if need_root grep -q '^tc:' "$RFS/etc/shadow" 2>/dev/null; then
+        replace_colon_record "$RFS/etc/shadow" 0600 tc 'tc:*:19000:0:99999:7:::'
+    fi
+    if need_root grep -Eq '^tc[[:space:]]' "$RFS/etc/sudoers" 2>/dev/null; then
+        need_root sed -i '/^tc[[:space:]]/d' "$RFS/etc/sudoers"
+    fi
+
+    # piCore's bootsync.sh hardcodes 'sethostname box'; x-chip-boot.sh fixes
+    # the hostname later, but the early boot should not flash 'box' either.
+    if need_root test -f "$RFS/opt/bootsync.sh"; then
+        need_root sed -i "s|/usr/bin/sethostname box|/usr/bin/sethostname $CHIP_HOSTNAME|" "$RFS/opt/bootsync.sh"
+    fi
 }
 
 install_os_branding() {
@@ -6482,6 +6499,11 @@ install_boot_runtime_script
 compile_host_mime_database
 
 # 4. pack (numeric owners; the flasher rebuilds the UBIFS from this tree).
+# Stock TinyCore runs its root from RAM, so files staged under /tmp (like the
+# base image's 98-tc.rules, already installed in /etc/udev/rules.d) never
+# persist; on this NAND root they would ship in the image and sit hidden under
+# the runtime tmpfs mount. Drop them before packing.
+need_root find "$RFS/tmp" -mindepth 1 -delete 2>/dev/null || true
 normalize_rootfs_metadata
 ( cd "$RFS" && tar --numeric-owner -czf "$HERE/$OUT" . )
 need_root chown "$(id -u):$(id -g)" "$HERE/$OUT" 2>/dev/null || true

@@ -49,16 +49,25 @@ For a GitHub Release:
 ```sh
 make distclean
 make deps
-make public-rootfs
-make public-verify
 make public-release
 ```
+
+`public-release` rebuilds the public rootfs first (so the packaged tarball
+always matches the git revision stamped in `MANIFEST.txt`), runs the public
+verifier, then writes the release files to `dist/`. `make public-rootfs` and
+`make public-verify` remain available as standalone steps while iterating.
 
 The public build path sets `PUBLIC_IMAGE=1`. That forces empty
 `authorized_keys`, removes WiFi config, and enables password SSH for the default
 `chip` account.
 
-Upload files from `dist/`.
+Upload files from `dist/` without renaming them, and make sure the release is
+marked as the latest release on GitHub (the default). The public flasher asks
+the GitHub API for the latest release and reads the real rootfs asset name
+from it, so the tag name is free-form and nothing needs updating after
+publishing. Optionally refresh `DEFAULT_RELEASE_TAG` in
+`scripts/flash-release-pocketchip.sh`; it is only the offline/rate-limit
+fallback.
 
 Before uploading, check:
 
@@ -88,10 +97,11 @@ make community-tcz
 ```
 
 The output goes to `dist/community-tcz/`. If that directory exists during rootfs
-assembly, `tic80.tcz`, `goattracker.tcz`, `mgba.tcz`, `doom.tcz`, and their
-dependencies are cached in `/tce/optional` for click-to-load use from the JWM
-`Games` menu. Do not add these extensions to the boot lists unless you
-intentionally want a larger and slower boot.
+assembly, the built extensions (`tic80.tcz`, `goattracker.tcz`, `sunvox.tcz`,
+`pixitracker.tcz`, `pixitracker-1bit.tcz`, `pixilang.tcz`, `mgba.tcz`,
+`doom.tcz`) and their dependencies are cached in `/tce/optional` for
+click-to-load use from the JWM menus. Do not add these extensions to the boot
+lists unless you intentionally want a larger and slower boot.
 
 Current extras:
 
@@ -99,6 +109,9 @@ Current extras:
 - `tic80.tcz`, MIT, built from upstream TIC-80 source
 - `mgba.tcz`, MPL-2.0, built from upstream mGBA source
 - `doom.tcz`, GPL-2-or-later Chocolate Doom plus BSD-3-Clause Freedoom assets
+- `sunvox.tcz`, `pixitracker.tcz`, `pixitracker-1bit.tcz`, `pixilang.tcz`,
+  WarmPlace freeware repackaged from the official Linux ARM releases; the
+  upstream license text is bundled inside each `.tcz`
 - `x-chip-pico8`, launcher only; PICO-8 itself is commercial and not bundled
 
 Do not upload bundled TIC-80 cartridge files in a public release unless each
