@@ -5848,7 +5848,7 @@ built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 built_at_epoch=$(date -u +%s)
 EOF
 
-    install_text 0755 "$RFS/usr/local/sbin/x-chip-update" <<'XCHIP_UPDATE_EOF'
+    install_text 0755 "$RFS/usr/local/bin/x-chip-update" <<'XCHIP_UPDATE_EOF'
 #!/bin/sh
 # x-chip-update: apply an x-chip release "update pack" in place.
 # Updates the kernel, modules, boot files, /opt runtime, x-chip tools, and the
@@ -5958,6 +5958,17 @@ resolve_release() {
     [ -n "$PACK_ASSET" ] || die "release $RELEASE_TAG ships no update pack; it needs a full reflash"
 }
 
+sha256_of() {
+    # piCore's busybox has no sha256sum applet; openssl ships with the image.
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1"
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 -r "$1"
+    else
+        busybox sha256sum "$1"
+    fi | awk '{ print $1 }'
+}
+
 download_pack() {
     mkdir -p "$CACHE"
     dest="$CACHE/$PACK_ASSET"
@@ -5971,7 +5982,8 @@ download_pack() {
     fi
     curl -fsSL -o "$dest.sha256" "$url.sha256" || die "could not download $PACK_ASSET.sha256"
     sha_expected=$(awk 'NF { print $1; exit }' "$dest.sha256")
-    sha_actual=$(sha256sum "$dest" | awk '{ print $1 }')
+    sha_actual=$(sha256_of "$dest")
+    [ -n "$sha_actual" ] || die "no sha256 tool available on this system"
     if [ "$sha_expected" != "$sha_actual" ]; then
         rm -f "$dest"
         die "sha256 mismatch for $PACK_ASSET; removed the bad download, run the update again"

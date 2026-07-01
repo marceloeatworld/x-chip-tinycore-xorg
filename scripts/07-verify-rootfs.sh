@@ -806,10 +806,10 @@ require_content usr/local/bin/x-chip-wifi-menu 'as_root ip link set'
 require_content usr/local/bin/x-chip-wifi-menu 'as_root iw dev'
 
 # In-place update tooling must ship in every image.
-require_mode_pattern usr/local/sbin/x-chip-update '-rwxr-xr-x'
-require_content usr/local/sbin/x-chip-update 'applied-release'
-require_content usr/local/sbin/x-chip-update '.update.tar.gz'
-require_content usr/local/sbin/x-chip-update 'ensure_clock'
+require_mode_pattern usr/local/bin/x-chip-update '-rwxr-xr-x'
+require_content usr/local/bin/x-chip-update 'applied-release'
+require_content usr/local/bin/x-chip-update '.update.tar.gz'
+require_content usr/local/bin/x-chip-update 'ensure_clock'
 require_nonempty usr/local/share/x-chip/update-repo
 require_nonempty usr/local/share/x-chip/release-info
 require_content opt/x-chip-boot.sh 'Boot runtime complete'
