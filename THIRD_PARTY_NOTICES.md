@@ -64,6 +64,23 @@ redistributed in public release assets unless the distributor has the rights to
 do so. Commercial Doom WAD files are not bundled either; the Doom launcher uses
 the free Freedoom Phase 1 IWAD from `doom.tcz`.
 
+## Bundled Sample Media
+
+The image seeds a few small demo files into the user's home directory so the
+media players have something to open on first boot:
+
+- `config/sample-media/Music/dreamscape-sample.mp3`
+- `config/sample-media/Pictures/red-hood-field.jpeg`
+- `config/sample-media/Videos/night-lamp-dream.mp4`
+- `config/sample-media/Videos/pocket-video-demo.mp4`
+
+These are old, widely circulated internet materials of unknown authorship,
+included in good faith as placeholders and believed to be freely
+redistributable. If you are a rights holder of any of these files and want
+them removed or credited, open an issue on this repository and they will be
+replaced in the next release. Users can delete them from `~/Music`,
+`~/Pictures`, and `~/Videos` at any time.
+
 ## Firmware
 
 The image may include Realtek RTL8723BS firmware. For private builds this can be
