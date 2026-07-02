@@ -810,6 +810,7 @@ require_mode_pattern usr/local/bin/x-chip-update '-rwxr-xr-x'
 require_content usr/local/bin/x-chip-update 'applied-release'
 require_content usr/local/bin/x-chip-update '.update.tar.gz'
 require_content usr/local/bin/x-chip-update 'ensure_clock'
+require_content usr/local/bin/x-chip-update 'rootfs_built_at_epoch'
 require_nonempty usr/local/share/x-chip/update-repo
 require_nonempty usr/local/share/x-chip/release-info
 require_content opt/x-chip-boot.sh 'Boot runtime complete'

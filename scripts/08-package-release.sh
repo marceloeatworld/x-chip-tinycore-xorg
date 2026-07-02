@@ -92,6 +92,7 @@ tinycore_version=$TINYCORE_VERSION
 tcz_repo=$TCZ_REPO
 rootfs_file=$(basename "$rootfs_out")
 rootfs_sha256=$rootfs_sha
+rootfs_built_at_epoch=$(extract_entry usr/local/share/x-chip/release-info | sed -n 's/^built_at_epoch=//p' | head -n 1)
 update_pack_file=$(basename "$pack_out")
 update_pack_sha256=$pack_sha
 contains_wifi_config=$has_wifi

@@ -5868,6 +5868,7 @@ KERNEL_BACKUP_FILES="boot/zImage boot/sun5i-r8-chip.dtb boot/boot.scr"
 
 CHECK=0
 YES=0
+FORCE=0
 ROLLBACK=0
 TAG=
 PACK_FILE=
@@ -5885,6 +5886,7 @@ User files in /home, WiFi config, and SSH keys are never touched.
 Options:
   --check       only report whether an update is available
   --yes         apply without asking for confirmation
+  --force       reapply even if this device already runs the latest build
   --tag TAG     apply a specific release instead of the latest
   --file PACK   apply a local .update.tar.gz (no download, no sha256 check)
   --rollback    restore the kernel/boot files saved before the last update
@@ -5899,6 +5901,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --check) CHECK=1 ;;
         --yes) YES=1 ;;
+        --force) FORCE=1 ;;
         --rollback) ROLLBACK=1 ;;
         --tag) TAG=${2:?missing value for --tag}; shift ;;
         --file) PACK_FILE=${2:?missing value for --file}; shift ;;
@@ -5956,6 +5959,17 @@ resolve_release() {
     PACK_ASSET=$(printf '%s\n' "$json" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\.update\.tar\.gz\)".*/\1/p' | head -n 1)
     [ -n "$RELEASE_TAG" ] || die "no release found for $REPO"
     [ -n "$PACK_ASSET" ] || die "release $RELEASE_TAG ships no update pack; it needs a full reflash"
+}
+
+release_matches_local_build() {
+    # A fresh flash has no applied-release marker but knows its own build
+    # time; the release MANIFEST carries the matching stamp, so compare the
+    # two before downloading a pack this device already runs.
+    local_epoch=$(sed -n 's/^built_at_epoch=//p' "$SHARE/release-info" 2>/dev/null | head -n 1)
+    [ -n "$local_epoch" ] || return 1
+    remote_epoch=$(curl -fsSL "https://github.com/$REPO/releases/download/$RELEASE_TAG/MANIFEST.txt" 2>/dev/null | sed -n 's/^rootfs_built_at_epoch=//p' | head -n 1)
+    [ -n "$remote_epoch" ] || return 1
+    [ "$local_epoch" -ge "$remote_epoch" ]
 }
 
 sha256_of() {
@@ -6052,6 +6066,12 @@ main() {
         log "available: $RELEASE_TAG"
         if [ "$current" = "$RELEASE_TAG" ]; then
             log "already up to date"
+            exit 0
+        fi
+        if [ "$FORCE" != 1 ] && release_matches_local_build; then
+            log "this device already runs the build published as $RELEASE_TAG"
+            log "nothing to download (use --force to reapply anyway)"
+            printf '%s\n' "$RELEASE_TAG" >"$MARKER" 2>/dev/null || true
             exit 0
         fi
         if [ "$CHECK" = 1 ]; then
