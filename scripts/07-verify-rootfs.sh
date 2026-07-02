@@ -805,6 +805,13 @@ require_content usr/local/bin/x-chip-wifi-menu 'as_root'
 require_content usr/local/bin/x-chip-wifi-menu 'as_root ip link set'
 require_content usr/local/bin/x-chip-wifi-menu 'as_root iw dev'
 
+# Power controls: menu entries exist and always confirm before acting.
+require_mode_pattern usr/local/bin/x-chip-shutdown '-rwxr-xr-x'
+require_content usr/local/bin/x-chip-shutdown 'Type y to'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-shutdown poweroff'
+require_content usr/local/share/x-chip/xorg/jwmrc 'x-chip-shutdown reboot'
+require_content usr/local/bin/x-chip-xorg-session '.jwmrc.shipped'
+
 # In-place update tooling must ship in every image.
 require_mode_pattern usr/local/bin/x-chip-update '-rwxr-xr-x'
 require_content usr/local/bin/x-chip-update 'applied-release'

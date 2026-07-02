@@ -196,8 +196,9 @@ clock, plus organized menus for everything else.
 - `Menu > Brightness`: LCD brightness (also `x-chip-brightness` in a terminal)
 - `Menu > Pocket`: battery/keyboard/audio status, time, logs, system update
 - `Menu > Window`: process monitor, close apps, restart the UI
-- The root menu opens on right-click/touch button 3 only, and there are no
-  direct power-off entries in the menu, so a stray tap cannot kill the session
+- `Menu > Pocket` also has `Reboot` and `Power Off` entries; both always ask
+  for confirmation first, so a stray tap cannot kill the session
+  (`x-chip-shutdown` from a terminal does the same)
 
 UI defaults use `Luxi Sans 9` and `Luxi Mono 9` so apps fit the `480x272` LCD.
 JWM uses a small local XPM icon set (`/usr/local/share/x-chip/xorg/icons`),

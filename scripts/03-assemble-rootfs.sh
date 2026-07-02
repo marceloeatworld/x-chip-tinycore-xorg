@@ -3876,6 +3876,7 @@ install_user_desktop_config() {
 	home="$(user_home)"
 	mkdir -p "$home"
 	cp /usr/local/share/x-chip/xorg/jwmrc "$home/.jwmrc"
+	cp /usr/local/share/x-chip/xorg/jwmrc "$home/.jwmrc.shipped"
 	mkdir -p "$home/.config/geany" "$home/.config/leafpad" \
 		"$home/.config/pcmanfm/default" "$home/.config/gtk-3.0" "$home/.config/mc" \
 		"$home/.local/share/applications" "$home/.dillo"
@@ -3891,7 +3892,7 @@ install_user_desktop_config() {
 	cp /usr/local/share/x-chip/xorg/Xdefaults "$home/.Xdefaults"
 	cp /usr/local/share/x-chip/xorg/gtk3-settings.ini "$home/.config/gtk-3.0/settings.ini"
 	if id "$TC_USER" >/dev/null 2>&1; then
-		chown -R "$TC_USER":"$TC_USER" "$home/.jwmrc" "$home/.config" "$home/.local" "$home/.dillo" "$home/.gtkrc-2.0" "$home/.Xdefaults" 2>/dev/null || true
+		chown -R "$TC_USER":"$TC_USER" "$home/.jwmrc" "$home/.jwmrc.shipped" "$home/.config" "$home/.local" "$home/.dillo" "$home/.gtkrc-2.0" "$home/.Xdefaults" 2>/dev/null || true
 	fi
 }
 
@@ -4656,8 +4657,20 @@ if [ -f "$HOME/.Xdefaults" ] && command -v xrdb >/dev/null 2>&1; then
 	xrdb -merge "$HOME/.Xdefaults" >/tmp/xrdb.log 2>&1 || true
 fi
 
-if [ ! -f "$HOME/.jwmrc" ] && [ -f /usr/local/share/x-chip/xorg/jwmrc ]; then
-	cp /usr/local/share/x-chip/xorg/jwmrc "$HOME/.jwmrc"
+SHIPPED_JWMRC=/usr/local/share/x-chip/xorg/jwmrc
+if [ -f "$SHIPPED_JWMRC" ]; then
+	if [ ! -f "$HOME/.jwmrc" ]; then
+		cp "$SHIPPED_JWMRC" "$HOME/.jwmrc"
+		cp "$SHIPPED_JWMRC" "$HOME/.jwmrc.shipped"
+	elif [ ! -f "$HOME/.jwmrc.shipped" ] || cmp -s "$HOME/.jwmrc" "$HOME/.jwmrc.shipped"; then
+		# The user never customized the menu, so follow system updates. No
+		# .jwmrc.shipped means a home from before the update system: adopt
+		# the current menu once and start tracking.
+		if ! cmp -s "$HOME/.jwmrc" "$SHIPPED_JWMRC"; then
+			cp "$SHIPPED_JWMRC" "$HOME/.jwmrc"
+		fi
+		cp "$SHIPPED_JWMRC" "$HOME/.jwmrc.shipped" 2>/dev/null || true
+	fi
 fi
 
 case "$X_CHIP_WM" in
@@ -5038,6 +5051,9 @@ EOF
       <Program label="Audio Status" icon="pocket.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Audio -e x-chip-term-hold x-chip-audio-status</Program>
       <Program label="Logs" icon="monitor.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Logs -e x-chip-logs</Program>
       <Program label="System Update" icon="refresh.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Update -e x-chip-term-hold sudo x-chip-update</Program>
+      <Separator/>
+      <Program label="Reboot" icon="refresh.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title Reboot -e x-chip-shutdown reboot</Program>
+      <Program label="Power Off" icon="close.xpm">aterm -bg '#0F1716' -fg '#EAF2EF' -cr '#1F7A66' -geometry 58x14+0+0 -title PowerOff -e x-chip-shutdown poweroff</Program>
     </Menu>
     <Menu label="Touch" icon="touch.xpm">
       <Program label="Apply Calibration" icon="touch.xpm">x-chip-x-apply-calibration</Program>
@@ -5833,6 +5849,38 @@ compile_host_mime_database() {
     fi
     echo ">> compile MIME database"
     update-mime-database "$mime_dir"
+}
+
+install_power_tools() {
+    install_text 0755 "$RFS/usr/local/bin/x-chip-shutdown" <<'EOF'
+#!/bin/sh
+# Confirmed power off / reboot: the JWM menu must never kill the session on a
+# stray tap, so this always asks first.
+set -eu
+
+ACTION=${1:-poweroff}
+case "$ACTION" in
+	poweroff|reboot) ;;
+	*) echo "usage: x-chip-shutdown [poweroff|reboot]" >&2; exit 2 ;;
+esac
+
+printf 'Type y to %s now: ' "$ACTION"
+read -r answer || answer=
+case "$answer" in
+	y|Y|yes|YES) ;;
+	*) echo "cancelled"; exit 0 ;;
+esac
+
+sync
+if [ "$(id -u)" = 0 ]; then
+	"$ACTION"
+elif command -v sudo >/dev/null 2>&1; then
+	sudo "$ACTION"
+else
+	echo "need root to $ACTION" >&2
+	exit 1
+fi
+EOF
 }
 
 install_update_tooling() {
@@ -6794,6 +6842,7 @@ prune_conflicting_xorg_defaults_from_rootfs
 install_preseeded_firmware_fallback
 install_boot_runtime_script
 install_update_tooling
+install_power_tools
 compile_host_mime_database
 
 # 4. pack (numeric owners; the flasher rebuilds the UBIFS from this tree).
